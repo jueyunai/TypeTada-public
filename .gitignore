@@ -1,0 +1,45 @@
+# Credentials and local overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.codex/config.toml
+.edgeone/
+
+# Local runtime, uploads, private evidence
+# Independent public release repository, managed separately from this private repo.
+/TypeTada-public/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+node_modules/
+dist/
+coverage/
+.coverage
+data/
+tmp/
+artifacts/
+*.log
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.DS_Store
+
+# OMC (oh-my-claudecode) local runtime state
+.omc/*
+!.omc/skills/
+!.omc/skills/**
+web/.omc/
+
+# Keep dependency lockfiles and reviewed vendor sources tracked.
+
+
+.codex
+*.tsbuildinfo
+
+# Generated from independent Skill sources at build time
+web/public/library/
+web/public/typetada-source.zip

@@ -1,0 +1,86 @@
+[
+  {
+    "id": "moyu-green",
+    "source": "https://github.com/isjiamu/gzh-design-skill/releases/download/assets-v1/lf-moyu-green.png",
+    "sha256": "923a8af8e9eb3f31601ac2469d2f906c2a020b021d69b00435601fdbbd61ec4d",
+    "originalSize": [
+      1440,
+      8400
+    ]
+  },
+  {
+    "id": "red-white",
+    "source": "https://github.com/isjiamu/gzh-design-skill/releases/download/assets-v1/lf-red-white.png",
+    "sha256": "060d8d54435357dacb3a5404ad7c3ca308ffa2724242d468f8ae6f7b3f04d707",
+    "originalSize": [
+      1440,
+      6800
+    ]
+  },
+  {
+    "id": "graphite-minimal",
+    "source": "https://github.com/isjiamu/gzh-design-skill/releases/download/assets-v1/lf-graphite-minimal.png",
+    "sha256": "29ce72cb0c19ebbf499e4c535d48a73f71a9ea49dbce01d8bc4fcc2366d11233",
+    "originalSize": [
+      1440,
+      7200
+    ]
+  },
+  {
+    "id": "zen-whitespace",
+    "source": "https://github.com/isjiamu/gzh-design-skill/releases/download/assets-v1/lf-zen-whitespace.png",
+    "sha256": "35017577eaf39a501ca998d03cf058c3b825835e0b152c3d91a40704b1d6ff7e",
+    "originalSize": [
+      1440,
+      7200
+    ]
+  },
+  {
+    "id": "moyu-ticket",
+    "source": "https://github.com/isjiamu/gzh-design-skill/releases/download/assets-v1/lf-moyu-ticket.png",
+    "sha256": "bbd84c6f6827ab3498ede608ade87a76ca12ce9571445e97295f69522675d3ab",
+    "originalSize": [
+      1440,
+      7200
+    ]
+  },
+  {
+    "id": "olive-journal",
+    "source": "https://github.com/isjiamu/gzh-design-skill/releases/download/assets-v1/lf-olive-journal.png",
+    "sha256": "9695247ba57d9b6f17395e7db62d4ae7891e0ad0ac92d0ee7021e0cb53226296",
+    "originalSize": [
+      1440,
+      7200
+    ]
+  },
+  {
+    "id": "forward-step",
+    "source": "skills/gzh-design/assets/theme-previews/theme-forward-step.html",
+    "sha256": "0cb653bf9b2ec8fd191d539ca34482ed7e0bf2aeb885345bc5b3d2febb06da0c",
+    "captureViewport": [
+      677,
+      920
+    ],
+    "note": "本地模板组件HTML浏览器真实截图，不是生成文章；完整组件通过受限样张接口查看。"
+  },
+  {
+    "id": "little-growth",
+    "source": "skills/gzh-design/assets/theme-previews/theme-little-growth.html",
+    "sha256": "87a0ae0fc71cc03305dfba8cb548b43f93a4308c7d4dd5eb4a7de6f82734f54f",
+    "captureViewport": [
+      677,
+      920
+    ],
+    "note": "本地模板组件HTML浏览器真实截图，不是生成文章；完整组件通过受限样张接口查看。"
+  },
+  {
+    "id": "moyu-blue",
+    "source": "skills/gzh-design/assets/theme-previews/theme-moyu-blue.html",
+    "sha256": "fe04db182084ab737192cce9715a43cc53e24816a3082a16a8a83ce6beeb8cb2",
+    "captureViewport": [
+      677,
+      920
+    ],
+    "note": "本地模板组件HTML浏览器真实截图，不是生成文章；完整组件通过受限样张接口查看。"
+  }
+]
