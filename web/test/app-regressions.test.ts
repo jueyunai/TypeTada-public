@@ -401,7 +401,7 @@ it("shows theme capsule in preview toolbar, renders default sample when article 
   );
   expect(themeBtn).not.toBeNull();
   expect(themeBtn?.textContent).toContain("测试");
-  expect(themeBtn?.textContent).toContain("换主题");
+  expect(themeBtn?.querySelector(".theme-select-caret")).not.toBeNull();
   expect(host.querySelector(".actionbar .theme-select")).toBeNull();
   await act(async () => {
     themeBtn!.click();
@@ -411,6 +411,12 @@ it("shows theme capsule in preview toolbar, renders default sample when article 
   );
   expect(themeDialog).not.toBeNull();
   expect(themeDialog?.textContent).toContain("为文章选个好模样");
+  expect(themeDialog?.textContent).toContain(
+    "选一套喜欢的版式，预览与切换不消耗额度。",
+  );
+  expect(themeDialog?.textContent).not.toContain("上游项目样图");
+  expect(themeDialog?.textContent).not.toContain("上游真实样张");
+  expect(themeDialog?.textContent).not.toContain("本地模板组件样张");
   await act(async () => {
     themeDialog!
       .querySelector<HTMLButtonElement>('button[aria-label="关闭面板"]')!
@@ -506,6 +512,22 @@ it("shows theme capsule in preview toolbar, renders default sample when article 
   expect(
     host.querySelector('[role="dialog"][aria-label="全屏排版预览"]'),
   ).toBeNull();
+  await act(async () => {
+    themeBtn!.click();
+  });
+  const autoThemeBtn = host.querySelector<HTMLButtonElement>(
+    '[role="dialog"][aria-label="选择排版主题"] button.auto-theme',
+  );
+  expect(autoThemeBtn).not.toBeNull();
+  await act(async () => {
+    autoThemeBtn!.click();
+  });
+  expect(
+    host.querySelector(".preview-pane .pane-toolbar .theme-select")?.textContent,
+  ).toContain("AI 自动选");
+  expect(
+    host.querySelector(".preview-pane .pane-toolbar .theme-select")?.textContent,
+  ).not.toContain("AI 自动选主题");
 });
 
 it("opens directly in WYSIWYG writing mode without false dirty, supports fullscreen writing, rich image preview, and Markdown cursor insertion", async () => {
@@ -813,4 +835,25 @@ it("shows pre-copy compatibility warning banner without blocking copy and render
   );
   expect(host.textContent).not.toContain("AI 新增的内容");
   expect(host.textContent).not.toContain("span leaf");
+});
+it("defaults remember-wallet checkbox to checked when disconnected and allows unchecking", async () => {
+  vi.mocked(walletModule.walletStatus).mockResolvedValue({
+    connected: false,
+    remember: false,
+    balanceYuan: null,
+  });
+  await store.createArticle("记住钱包默认", "正文。");
+  await mount("记住钱包默认");
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>("button.wallet-button")?.click();
+  });
+  const checkbox = host.querySelector<HTMLInputElement>(
+    ".remember-wallet input[type='checkbox']",
+  );
+  expect(checkbox).not.toBeNull();
+  expect(checkbox!.checked).toBe(true);
+  await act(async () => {
+    checkbox!.click();
+  });
+  expect(checkbox!.checked).toBe(false);
 });

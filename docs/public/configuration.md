@@ -29,10 +29,6 @@ TypeTada 没有共享模型 Key 或开发者 Key 回退。每位使用者在浏�
 
 当前请求使用 `thinking: {type: "enabled"}`、`reasoning_effort: "high"`、总输出上限 65,536 tokens；改变模型 ID 不代表自动适配所有服务商或模型。
 
-## 对应源码包
+## 开源仓库
 
-帮助面板下载的 ZIP 包含公共构建源码、依赖锁、Skill/主题、许可及 `build-config.json`。后者只记录本次构建使用的上述公开参数与模式，不含 Key。要复现其应用配置，可把这些值写入解压目录的 `web/.env.local` 后运行 README 中的安装、构建命令。
-
-ZIP 的文件边界由 `web/scripts/source-files.json` 明确列出；构建不会递归打包私有 `docs/`、`specs/`、`artifacts/`、用户数据或本地环境文件。此源码下载不依赖 GitHub 公有仓库是否已经建立。
-
-GitHub 项目页用于浏览源码、Issue 和 PR；“下载当前版本源码”提供当前运行版本对应的源码。公开仓库版本可能晚于线上版本，因此保留两种入口。沿用 AGPL 时，公开清单应包含受覆盖程序构建、运行和修改所需源码及脚本；内部工作记录和真实凭据不属于应打包内容。
+公开代码、依赖锁、Skill/主题、许可及构建脚本统一通过 `VITE_GITHUB_REPOSITORY_URL` 配置的 GitHub 开源仓库提供，不再随静态站点额外打包分发源码 ZIP。要复现对应配置，只需在本地 `web/.env.local` 中写入上述公开参数后按 README 执行安装与构建命令即可。

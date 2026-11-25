@@ -12,6 +12,7 @@ import {
   ArrowDownToLine,
   ArrowLeft,
   ArrowRight,
+  ArrowUpRight,
   BookOpen,
   Check,
   ChevronDown,
@@ -536,7 +537,7 @@ export default function App() {
     [note, setNote] = useState(""),
     [consent, setConsent] = useState(false),
     [showImages, setShowImages] = useState(false),
-    [remember, setRememberWallet] = useState(false);
+    [remember, setRememberWallet] = useState(true);
   const [busy, setBusy] = useState(false),
     [assets, setAssets] = useState<Asset[]>([]),
     [search, setSearch] = useState(""),
@@ -762,7 +763,7 @@ export default function App() {
           );
         setArticles(rows);
         setWallet(w);
-        setRememberWallet(w.remember);
+        setRememberWallet(w.connected ? w.remember : true);
         applyPrefs(p);
         setDataEpoch(currentEpoch);
         setReady(true);
@@ -2023,21 +2024,45 @@ export default function App() {
           )}
         </nav>
         <div className="sidebar-bottom">
-          <a
-            className="sidebar-watcha-badge"
-            href="https://watcha.cn/products/typetada?utm_source=product-badge&utm_content=invite"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <img
-              src="https://tos.watcha.cn/public/images/invite-0-white.png"
-              alt="在观猹查看文有样 TypeTada（新标签页）"
-              width={170}
-              height={36}
-              loading="lazy"
-              referrerPolicy="no-referrer"
-            />
-          </a>
+          <div className="sidebar-community-links">
+            <a
+              className="sidebar-watcha-badge"
+              href="https://watcha.cn/products/typetada?utm_source=product-badge&utm_content=invite"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <img
+                src="https://tos.watcha.cn/public/images/invite-0-white.png"
+                alt="在观猹查看文有样 TypeTada（新标签页）"
+                width={170}
+                height={36}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+              />
+            </a>
+            {GITHUB_REPOSITORY_URL && (
+              <a
+                className="sidebar-github-link"
+                href={GITHUB_REPOSITORY_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="在 GitHub 查看开源仓库（新窗口打开）"
+                title="GitHub 开源仓库"
+              >
+                <svg
+                  width={15}
+                  height={15}
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+                </svg>
+                <span>GitHub 开源</span>
+                <ArrowUpRight size={13} className="sidebar-github-arrow" />
+              </a>
+            )}
+          </div>
           <div className="sidebar-backup-links">
             <button
               className="text-button"
@@ -2526,7 +2551,8 @@ export default function App() {
           >
             <div className="pane-toolbar">
               <span>
-                <LayoutTemplate size={15} /> 排版预览
+                <LayoutTemplate size={15} />{" "}
+                <span className="pane-title-label">排版预览</span>
                 <button
                   className="theme-select"
                   aria-label="选择排版主题"
@@ -2543,15 +2569,23 @@ export default function App() {
                   />
                   <b>
                     {mode === "auto"
-                      ? "AI 自动选主题"
+                      ? "AI 自动选"
                       : selectedTheme?.name || "摸鱼绿"}
                   </b>
-                  <small>换主题</small>
+                  <ChevronDown
+                    size={13}
+                    className="theme-select-caret"
+                    aria-hidden="true"
+                  />
                 </button>
                 {(mode === "auto" || themeChanged) &&
                   displayTheme &&
                   display &&
-                  !display.demo && <em>成稿：{displayTheme.name}</em>}
+                  !display.demo && (
+                    <em title={`当前成稿主题：${displayTheme.name}`}>
+                      成稿：{displayTheme.name}
+                    </em>
+                  )}
                 {display?.demo && <em>Skill 示例</em>}
                 {sampleTheme && <em>主题样张</em>}
                 {display && display.decisions.length > 0 && (
@@ -3104,7 +3138,9 @@ export default function App() {
                 </div>
               ) : (
                 <>
-                  <p className="drawer-description">选一套喜欢的版式。</p>
+                  <p className="drawer-description">
+                    选一套喜欢的版式，预览与切换不消耗额度。
+                  </p>
                   <button
                     className={
                       "auto-theme " + (mode === "auto" ? "chosen" : "")
@@ -3153,7 +3189,6 @@ export default function App() {
                         </div>
                         <small>{t.description.split("（")[0]}</small>
                         <div className="theme-card-bottom">
-                          <span>{themeSampleLabel(t.id)}</span>
                           <button
                             className="text-button"
                             aria-label={`使用${t.name}主题`}
@@ -3172,9 +3207,6 @@ export default function App() {
                       </article>
                     ))}
                   </div>
-                  <p className="small-label">
-                    六套基础主题使用上游项目样图，三套扩展主题展示本地模板真实截图；查看与选择不调用模型。
-                  </p>
                 </>
               ))}
             {drawer === "settings" && (
@@ -3527,7 +3559,7 @@ export default function App() {
                   <span>
                     在此设备记住钱包
                     <small>
-                      仅在个人设备勾选。凭据保存在浏览器，可被设备使用者读取。
+                      公共设备请取消勾选。凭据保存在浏览器，可被设备使用者读取。
                     </small>
                   </span>
                 </label>
@@ -3767,7 +3799,7 @@ export default function App() {
                     docRef.current = null;
                     savedRef.current = "";
                     applyPrefs(DEFAULT_PREFERENCES);
-                    setRememberWallet(false);
+                    setRememberWallet(true);
                     setDoc(null);
                     setResult(null);
                     setJob(null);
@@ -3794,18 +3826,14 @@ export default function App() {
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      <span>GitHub 项目页</span>
+                      <span>GitHub 开源仓库</span>
                       <ArrowRight size={15} />
                     </a>
                   ) : (
                     <span className="help-link" aria-disabled="true">
-                      GitHub 项目页（筹备中）
+                      GitHub 开源仓库（筹备中）
                     </span>
                   )}
-                  <a className="help-link" href="/typetada-source.zip" download>
-                    <span>下载当前版本源码</span>
-                    <ArrowDownToLine size={15} />
-                  </a>
                   <a
                     className="help-link"
                     href="https://github.com/isjiamu/gzh-design-skill"

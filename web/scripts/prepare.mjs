@@ -3,8 +3,6 @@ import { resolve, relative, join } from "node:path";
 import { createHash } from "node:crypto";
 import { JSDOM } from "jsdom";
 import createPurify from "dompurify";
-import { zipSync, strToU8 } from "fflate";
-import { loadEnv } from "vite";
 import { files } from "./files.mjs";
 const root = resolve(import.meta.dirname, "../.."),
   publicDir = resolve(root, "web/public"),
@@ -136,49 +134,7 @@ await writeFile(
     htmlFragment: purify.sanitize(dom.body.innerHTML, { ADD_ATTR: ["leaf"] }),
   }),
 );
-const source = {};
-const manifest = JSON.parse(
-  await utf8(join(root, "web/scripts/source-files.json")),
-);
-for (const folder of manifest.directories) {
-  for (const path of await files(join(root, folder)))
-    source["typetada/" + relative(root, path)] = new Uint8Array(
-      await readFile(path),
-    );
-}
-for (const name of manifest.files) {
-  source["typetada/" + name] = strToU8(await utf8(join(root, name)));
-}
-// These values are public browser parameters, not credentials.
-// Include their effective values so the running build can be reconstructed.
-const mode = process.argv.includes("--development")
-  ? "development"
-  : "production";
-const env = loadEnv(mode, join(root, "web"), [
-  "VITE_TOKENDANCE_",
-  "VITE_GITHUB_",
-  "VITE_SITE_",
-]);
-source["typetada/build-config.json"] = strToU8(
-  JSON.stringify(
-    {
-      mode,
-      ...Object.fromEntries(
-        [
-          "VITE_TOKENDANCE_APP_URL",
-          "VITE_TOKENDANCE_KEY_NAME",
-          "VITE_TOKENDANCE_MODEL",
-          "VITE_GITHUB_REPOSITORY_URL",
-          "VITE_SITE_ICP_FILING",
-          "VITE_SITE_PUBLIC_SECURITY_FILING",
-        ].map((name) => [name, env[name] || ""]),
-      ),
-    },
-    null,
-    2,
-  ) + "\n",
-);
-await writeFile(join(publicDir, "typetada-source.zip"), zipSync(source));
+await rm(join(publicDir, "typetada-source.zip"), { force: true });
 console.log(
-  `Prepared ${packages.reduce((n, p) => n + p.themes.length, 0)} Skill themes, static specimens and corresponding source (no runtime keys/data).`,
+  `Prepared ${packages.reduce((n, p) => n + p.themes.length, 0)} Skill themes and static specimens.`,
 );

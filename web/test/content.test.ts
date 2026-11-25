@@ -285,4 +285,4 @@ describe("browser content contract", () => {
     expect(result.enhancements[0]?.type).toBe("cover");
   });
 });
-it('all registered themes have real source images and hash-checked contexts',async()=>{const index=JSON.parse(readFileSync('public/library/index.json','utf8'));expect(index.packages[0].themes).toHaveLength(9);for(const theme of index.packages[0].themes){const path='public'+theme.contextPath;expect(readFileSync(path,'utf8')).toContain('公众号');expect(readFileSync('public/theme-previews/'+theme.id+'-thumb.webp').length).toBeGreaterThan(1000);}});
+it('all registered themes have real source images and hash-checked contexts',async()=>{const index=JSON.parse(readFileSync('public/library/index.json','utf8'));expect(index.packages[0].themes).toHaveLength(13);for(const theme of index.packages[0].themes){const path='public'+theme.contextPath;expect(readFileSync(path,'utf8')).toContain('公众号');expect(readFileSync('public/theme-previews/'+theme.id+'-thumb.webp').length).toBeGreaterThan(1000);}});

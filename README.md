@@ -48,10 +48,10 @@ pnpm --dir web build
 pnpm --dir web preview
 ```
 
-构建会生成 Skill 静态规则、样张和对应源码 ZIP。预览地址为 [构建预览](http://localhost:4173/editor)，与开发端口的数据相互独立。
+构建会生成 Skill 静态规则和样张。预览地址为 [构建预览](http://localhost:4173/editor)，与开发端口的数据相互独立。
 
-发布 **整个 `web/dist/`** 到 HTTPS 静态托管，包括 `index.html`、`assets/`、`library/`、`theme-previews/` 和源码 ZIP。线上无需运行 Node、Python 或容器。托管环境需正确处理 `/editor` 回调、安全响应头与缓存，见[静态部署说明](docs/public/static-hosting.md)。
+发布 **整个 `web/dist/`** 到 HTTPS 静态托管，包括 `index.html`、`assets/`、`library/` 和 `theme-previews/`。线上无需运行 Node、Python 或容器。托管环境需正确处理 `/editor` 回调、安全响应头与缓存，见[静态部署说明](docs/public/static-hosting.md)。
 
 ## 许可
 
-AGPL-3.0-or-later，见 [LICENSE](LICENSE)、[NOTICE](NOTICE.md) 和 [Skill 来源说明](skills/gzh-design/SOURCE.md)。帮助面板可进入配置好的 GitHub 项目页，并提供 `/typetada-source.zip`，含当前构建源码、依赖锁、构建脚本及公开构建参数，不包含用户数据、钱包 Key 或内部工作记录。
+AGPL-3.0-or-later，见 [LICENSE](LICENSE)、[NOTICE](NOTICE.md) 和 [Skill 来源说明](skills/gzh-design/SOURCE.md)。应用内及开源仓库已提供公开源码、依赖锁与构建脚本，不包含用户数据、钱包 Key 或内部工作记录。

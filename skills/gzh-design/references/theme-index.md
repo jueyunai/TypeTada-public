@@ -16,7 +16,11 @@
 | 橄榄手记 | `#1e1f23` 墨黑（配橙 `#ed7b2f`） | 内刊手记、深度评测、案例复盘、系统性说明文档（编辑部内刊质感，分节形式多样，信息密度偏高） | `references/theme-olive-journal.md` | `border-bottom:2px solid #ed7b2f;font-weight:600;` |
 | 向前一格 | `#245BD6` 清蓝 | 产品实践、科技观察、案例复盘（阶形标识、一体浅蓝封面、轻量分节） | `references/theme-forward-step.md` | `border-bottom:2px solid #CDDEFF;font-weight:600;` |
 | 小步生长 | `#087F74` 青绿 | 成长记录、深度随笔、个人实践（芽点刊头、白底、浅杏高亮、柔和引文） | `references/theme-little-growth.md` | `border-bottom:2px solid #C8E9DB;font-weight:600;` |
-| 摸鱼蓝 | `#2563EB` 明蓝 | 教程、测评、工具清单、产品实践（摸鱼绿的蓝色变体，保留卡片与横滑导读） | `references/theme-moyu-blue.md` | `border-bottom:2px solid #BFDBFE;font-weight:600;` |
+| 晴空手记 | `#2563EB` 明蓝 | 教程、测评、工具清单、产品实践（明蓝杂志风，16px/1.8 舒适阅读，卡片与横滑导读齐全） | `references/theme-moyu-blue.md` | `border-bottom:2px solid #BFDBFE;font-weight:600;` |
+| 鸢尾快讯 | `#7C3AED` 紫罗兰 | AI 与大模型评测、新工具盘点、前沿科技（紫罗兰杂志风，配暖黄高亮辨识度强） | `references/theme-iris-dispatch.md` | `border-bottom:2px solid #DDD6FE;font-weight:600;` |
+| 铅字刊物 | `#1E293B` 炭墨黑 | 商业观察、深度复盘、极客教程（炭墨黑配暖黄荧光笔，沉稳百搭不挑题材） | `references/theme-lead-journal.md` | `border-bottom:2px solid #CBD5E1;font-weight:600;` |
+| 落日工坊 | `#C2410C` 赤陶橙 | 实战经验、运营增长、独立开发与副业分享（赤陶暖橙杂志风，温暖有行动力） | `references/theme-sunset-studio.md` | `border-bottom:2px solid #FED7AA;font-weight:600;` |
+| 绯莓微刊 | `#BE123C` 复古莓红 | 好物种草、产品体验、热点解读与清单盘点（复古莓红轻快卡片风，与严肃编辑风区隔） | `references/theme-berry-digest.md` | `border-bottom:2px solid #FECDD3;font-weight:600;` |
 
 ## 选择建议
 
@@ -26,11 +30,15 @@
 
 ## 阅读参数与预览
 
-向前一格、小步生长、摸鱼蓝采用正文16px、行高1.8的默认阅读参数，具体分工与覆盖规则见 [reading-typography.md](reading-typography.md)。原有主题保留原默认值，用户确认的阅读参数可覆盖；不批量放大标题或装饰。
+向前一格、小步生长、晴空手记（原摸鱼蓝）、鸢尾快讯、铅字刊物、落日工坊、绯莓微刊采用正文16px、行高1.8的默认阅读参数，具体分工与覆盖规则见 [reading-typography.md](reading-typography.md)。原有主题保留原默认值，用户确认的阅读参数可覆盖；不批量放大标题或装饰。
 
 - [向前一格组件预览](../assets/theme-previews/theme-forward-step.html)
 - [小步生长组件预览](../assets/theme-previews/theme-little-growth.html)
-- [摸鱼蓝组件预览](../assets/theme-previews/theme-moyu-blue.html)
+- [晴空手记组件预览](../assets/theme-previews/theme-moyu-blue.html)
+- [鸢尾快讯组件预览](../assets/theme-previews/theme-iris-dispatch.html)
+- [铅字刊物组件预览](../assets/theme-previews/theme-lead-journal.html)
+- [落日工坊组件预览](../assets/theme-previews/theme-sunset-studio.html)
+- [绯莓微刊组件预览](../assets/theme-previews/theme-berry-digest.html)
 
 ## 下划线色值的权威性
 

@@ -6,7 +6,7 @@
 >
 > **公众号平台限制须知**：
 > - ❌ 不支持 `<style>`/`<script>`、CSS class/id、`position:fixed/absolute`、`float`、`@media`/`@keyframes`、`display:grid`
-> - ✅ 支持内联 `style`、`display:flex`（有限）、`linear-gradient`、`border-radius`、`box-shadow`、`<section>/<p>/<span>/<strong>/<img>` 等基础标签
+> - ✅ 支持内联 `style`、`display:flex`（有限）、`linear-gradient`（可渲染但有暗色模式检测风险，文字背景默认用纯色）、`border-radius`、`box-shadow`、`<section>/<p>/<span>/<strong>/<img>` 等基础标签
 >
 > **WeChat 兼容铁律**（本主题组件全部已按此写好，改动时必须遵守）：
 > - 所有"装饰性空元素"（圆点、渐变分割线、装饰短横、时间线竖线）**必须在内部放 `<span leaf=""><br></span>` 占位**，否则微信会剥掉样式
@@ -49,7 +49,7 @@
 
 字体栈：`-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif`
 
-阅读参数覆盖规则见 [reading-typography.md](reading-typography.md)。本库保留原版默认值，不将14px视为微信限制；若用户选择16px／1.8，须同步正文、列表及内容引用的内联样式，不放大封面、编号和标签。需要已配置16px阅读参数的蓝色变体时，直接使用 [theme-moyu-blue.md](theme-moyu-blue.md)。
+阅读参数覆盖规则见 [reading-typography.md](reading-typography.md)。本库保留原版默认值，不将14px视为微信限制；若用户选择16px／1.8，须同步正文、列表及内容引用的内联样式，不放大封面、编号和标签。需要已配置16px阅读参数的多色变体（晴空手记、鸢尾快讯、铅字刊物、落日工坊、绯莓微刊）时，可按 `theme-index.md` 选用对应主题（例如 [晴空手记](theme-moyu-blue.md)）。
 
 ---
 
@@ -875,7 +875,7 @@
 | 层级 | 样式 | 用途 | 频率 |
 |------|------|------|------|
 | **锚点层** | 绿色加粗 6a / 黄底下划线 6d / oneliner-card 9b | 核心概念、产品名、关键结论 | 全文 ≤5 处 |
-| **标记层** | 绿色下划线 6e（默认）/ 黄色渐变高亮 6c | 正文关键词强调 | 每段 1~3 处 |
+| **标记层** | 绿色下划线 6e（默认）/ 黄色荧光笔高亮 6c | 正文关键词强调 | 每段 1~3 处 |
 | **容器层** | quote-box 9a / 提示 10x / 胶囊 11a / 卡片 11x | 引用、旁注、提示、结构化信息 | 按需 |
 
 **克制原则**：
@@ -895,7 +895,7 @@
 | 盘点/工具清单 | skill/tool-label 7c + tool-card 11e + pill-list 11a | table 11f、oneliner-card 9b |
 | 观点/深度分析 | paragraph 5 + quote-box 9a + oneliner-card 9b | center-divider 9d、subtitle-highlight 9c |
 | 访谈/人物特稿 | paragraph 5 + quote-box 9a（引语）+ timeline 11d（经历脉络） | oneliner-card 9b、center-divider 9d |
-| 数据复盘/报告 | three-col-cards 11c + table 11f + ordered-list 11g | green-info 10d、黄色渐变高亮 6c |
+| 数据复盘/报告 | three-col-cards 11c + table 11f + ordered-list 11g | green-info 10d、黄色荧光笔高亮 6c |
 | 生活/情感随笔 | paragraph 5 + oneliner-card 9b + center-divider 9d | quote-box 9a（少量） |
 | 案例实战 | case-label 7b / timeline 11d + step-label 7a | prompt-block 8a、yellow-warning 10c |
 
@@ -913,7 +913,7 @@
 | `### 子标题` | 组件 9c subtitle-highlight | 黄色下划线小节标题 |
 | 普通段落 | 组件 5 paragraph | 每段主动标 1~3 处绿色下划线 6e |
 | `**加粗文字**` | 组件 6a 绿色加粗 | 核心概念/品牌名 |
-| `==高亮文字==` | 组件 6c 黄色渐变高亮 | 每段 ≤2 处 |
+| `==高亮文字==` | 组件 6c 黄色荧光笔高亮 | 每段 ≤2 处 |
 | `<u>下划线</u>` / `++文字++` | 组件 6e 绿色下划线 | 次要强调 |
 | `~~删除线~~` | 组件 6i 删除线灰色 | 被淘汰的概念 |
 | `> 引用段落`（非开头） | 组件 9a quote-box | 灰色虚线框（本主题特征） |

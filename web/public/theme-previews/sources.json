@@ -76,7 +76,47 @@
   {
     "id": "moyu-blue",
     "source": "skills/gzh-design/assets/theme-previews/theme-moyu-blue.html",
-    "sha256": "fe04db182084ab737192cce9715a43cc53e24816a3082a16a8a83ce6beeb8cb2",
+    "sha256": "b4c134ab1745d5f04a49f2d0895e7fd56928c2e5673db342f2bef1a591e48a81",
+    "captureViewport": [
+      677,
+      920
+    ],
+    "note": "本地模板组件HTML浏览器真实截图，不是生成文章；完整组件通过受限样张接口查看。"
+  },
+  {
+    "id": "iris-dispatch",
+    "source": "skills/gzh-design/assets/theme-previews/theme-iris-dispatch.html",
+    "sha256": "115d001c53f666b8723a7589675131bd0443f5972a1d29ec005cfbce11aaea70",
+    "captureViewport": [
+      677,
+      920
+    ],
+    "note": "本地模板组件HTML浏览器真实截图，不是生成文章；完整组件通过受限样张接口查看。"
+  },
+  {
+    "id": "lead-journal",
+    "source": "skills/gzh-design/assets/theme-previews/theme-lead-journal.html",
+    "sha256": "1b70b2419cac3e328a83cdbf4f2916ce8e70bc7af9597c8a5a9953d7d856fe72",
+    "captureViewport": [
+      677,
+      920
+    ],
+    "note": "本地模板组件HTML浏览器真实截图，不是生成文章；完整组件通过受限样张接口查看。"
+  },
+  {
+    "id": "sunset-studio",
+    "source": "skills/gzh-design/assets/theme-previews/theme-sunset-studio.html",
+    "sha256": "06ca91c11fda2e10c4f8a0141843592158d7e0b7c766f62d10f056fad3562ead",
+    "captureViewport": [
+      677,
+      920
+    ],
+    "note": "本地模板组件HTML浏览器真实截图，不是生成文章；完整组件通过受限样张接口查看。"
+  },
+  {
+    "id": "berry-digest",
+    "source": "skills/gzh-design/assets/theme-previews/theme-berry-digest.html",
+    "sha256": "ba35fa1305ae7214525a4b8ca084b3f7db920ef6aee135bfe15a8b5fbd997a7d",
     "captureViewport": [
       677,
       920

@@ -302,22 +302,70 @@ textarea {
   margin-top: 10px;
   flex-shrink: 0;
 }
+.sidebar-community-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .sidebar-watcha-badge {
   display: flex;
   align-items: center;
   width: min(170px, 100%);
-  min-height: 44px;
-  border-radius: 6px;
+  min-height: 36px;
+  border-radius: 999px;
 }
 .sidebar-watcha-badge img {
   display: block;
   width: 100%;
   height: auto;
 }
+.sidebar-github-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: min(170px, 100%);
+  height: 32px;
+  padding: 0 11px 0 12px;
+  border-radius: 999px;
+  background: #f5f8f6;
+  border: 1px solid #dce6e0;
+  color: #465d51;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+.sidebar-github-link > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-github-arrow {
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease;
+}
+.sidebar-github-link:hover {
+  background: var(--soft);
+  border-color: #b7d7c8;
+  color: var(--green-dark);
+  text-decoration: none;
+}
+.sidebar-github-link:hover .sidebar-github-arrow {
+  opacity: 0.95;
+  transform: translate(1px, -1px);
+}
 .sidebar-backup-links {
   display: flex;
   gap: 12px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 .sidebar-backup-links .text-button {
   margin-top: 0;
@@ -387,6 +435,10 @@ textarea {
   min-width: 0;
   overflow: hidden;
 }
+.pane-toolbar > span > svg,
+.pane-toolbar .pane-title-label {
+  flex-shrink: 0;
+}
 .pane-toolbar > div {
   display: flex;
   gap: 12px;
@@ -406,6 +458,11 @@ textarea {
   padding: 2px 5px;
   border-radius: 4px;
   color: #94a196;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
 }
 .article-title {
   font-family: "Songti SC", serif;
@@ -711,6 +768,11 @@ textarea {
   filter: none;
   border-color: #88be9f;
   background: #f4faf6;
+}
+.pane-toolbar .theme-select-caret {
+  color: var(--green);
+  flex-shrink: 0;
+  margin-left: -1px;
 }
 .settings-button {
   padding: 9px 6px;
@@ -1796,7 +1858,7 @@ a.help-link:hover {
 }
 .theme-card-bottom {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   gap: 6px;
   border-top: 1px solid var(--line);
@@ -2031,7 +2093,7 @@ a.help-link:hover {
     padding: 8px;
   }
   .theme-card-bottom {
-    align-items: flex-start;
+    align-items: flex-end;
     flex-direction: column;
     gap: 0;
   }
