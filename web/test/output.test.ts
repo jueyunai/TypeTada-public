@@ -1,10 +1,13 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   previewDocument,
   previewExport,
   copyRichText,
+  exportResult,
   layoutFailureFilename,
+  layoutFailureReport,
 } from "../src/output";
+import type { Job, LayoutResult } from "../src/types";
 
 it("names both report types by local job start time and an abbreviated task id", () => {
   const job = {
@@ -17,6 +20,23 @@ it("names both report types by local job start time and an abbreviated task id",
   expect(layoutFailureFilename(job, true)).toBe(
     "文有样-排版错误-含模型正文-2026-11-23_17-08-05-9b4acc79.json",
   );
+});
+
+it("exports the saved job version and leaves legacy jobs without a product version", () => {
+  const job: Job = {
+    id: "job_old",
+    articleId: "article_old",
+    sourceRevision: 1,
+    startedAt: 0,
+    status: "failed",
+    stage: "generate",
+    callCount: 1,
+    sent: true,
+  };
+  expect(JSON.parse(layoutFailureReport(job))).not.toHaveProperty("appVersion");
+  expect(
+    JSON.parse(layoutFailureReport({ ...job, appVersion: "0.6.0" })),
+  ).toMatchObject({ schemaVersion: 1, appVersion: "0.6.0" });
 });
 
 it("standalone export keeps exact HTML/plain copy payload and escapes hostile title/script text", () => {
@@ -49,6 +69,37 @@ it("standalone export keeps exact HTML/plain copy payload and escapes hostile ti
   (document.getElementById("copy") as HTMLButtonElement).click();
   expect(data["text/html"]).toBe(result.htmlFragment);
   expect(data["text/plain"]).toBe(result.plainText);
+});
+
+it("downloads a review draft as a full HTML page and asks before its copy action", () => {
+  const draft = {
+    title: "测试稿",
+    htmlFragment: '<section><p><span leaf="">成稿内容。</span></p></section>',
+    plainText: "成稿内容。",
+    validation: { ready: false },
+    reviewIssues: [{ sourceId: "s001", kind: "changed_text" }],
+  } as LayoutResult;
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+    function (this: HTMLAnchorElement) {
+      expect(this.download).toBe("typetada-preview-待核对.html");
+    },
+  );
+  try {
+    exportResult(draft, "preview");
+    expect(click).toHaveBeenCalledOnce();
+  } finally {
+    click.mockRestore();
+  }
+  const page = new DOMParser().parseFromString(previewExport(draft), "text/html");
+  expect(page.title).toBe("待核对稿 · 测试稿");
+  expect(page.querySelector(".export-review")?.textContent).toContain("发布前请对照原稿");
+  const script = page.querySelector("script")!.textContent!;
+  const scriptWindow = { confirm: vi.fn(() => false) };
+  new Function("document", "window", script)(page, scriptWindow);
+  (page.getElementById("copy") as HTMLButtonElement).click();
+  expect(scriptWindow.confirm).toHaveBeenCalledOnce();
+  const invalid = { ...draft, htmlFragment: "<section><footer>正文</footer></section>" };
+  expect(() => previewExport(invalid)).toThrow("未通过安全检查");
 });
 it("previewDocument matches WeChat content-box model and copyRichText stays compatible with legacy fixed width", () => {
   const legacy: any = {

@@ -1,7 +1,7 @@
 {
   "name": "typetada-web",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.8.0",
   "type": "module",
   "scripts": {
     "prepare:static": "node scripts/prepare.mjs",
@@ -23,7 +23,9 @@
     "css-tree": "^3.2.1",
     "dompurify": "^3.4.17",
     "fflate": "^0.8.3",
+    "html2canvas": "^1.4.1",
     "idb": "^8.0.4",
+    "jspdf": "^4.2.1",
     "lucide-react": "^0.468.0",
     "markdown-it": "^15.0.3",
     "react": "^19.0.0",

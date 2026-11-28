@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { version } from "../package.json";
 import * as store from "../src/db";
 import App from "../src/App";
 import * as library from "../src/library";
@@ -10,6 +11,7 @@ import * as imports from "../src/imports";
 import * as images from "../src/images";
 import * as walletModule from "../src/wallet";
 import * as pipelineModule from "../src/pipeline";
+import { checkGeneratedResult, sourceManifest } from "../src/content";
 
 vi.mock("../src/wallet", async (original) => ({
   ...(await original<any>()),
@@ -95,6 +97,21 @@ async function setTitle(value: string) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
+
+it("shows the build version below the usage guide title", async () => {
+  await store.createArticle("原稿", "正文");
+  await mount("原稿");
+  await act(async () => {
+    host
+      .querySelector<HTMLButtonElement>('button[aria-label="打开使用指南"]')!
+      .click();
+  });
+  const heading = host.querySelector(
+    '.drawer[aria-label="使用指南"] .drawer-header h2',
+  );
+  expect(heading?.textContent).toBe("从好内容，到好模样");
+  expect(heading?.nextElementSibling?.textContent).toBe(`当前版本 v${version}`);
+});
 
 it("renders an external image in original preview while the external-image checkbox remains unchecked", async () => {
   await store.createArticle(
@@ -695,7 +712,66 @@ it("refreshes wallet automatically when opened, marks current version in history
   expect(walletModule.walletStatus).toHaveBeenCalledWith(true);
 });
 
-it("shows running progress canvas, non-blocking edit hint, and persistent job alert card", async () => {
+it("offers a single full HTML export before review and can restore and undo one source difference", async () => {
+  const article = await store.createArticle("待核对文章", "开头。\n\n缺失的原稿。\n\n结尾。");
+  const { blocks, images } = sourceManifest(article.sourceMarkdown);
+  const draft = checkGeneratedResult(
+    "<section><p>开头。</p><p>结尾。</p></section>",
+    blocks,
+    images,
+  );
+  await store.saveResult({
+    ...draft,
+    resultId: "review-draft",
+    articleId: article.id,
+    sourceRevision: article.revision,
+    title: article.title,
+    sourceMarkdown: article.sourceMarkdown,
+    createdAt: 1,
+    themeId: "moyu-green",
+    skillId: "gzh-design",
+    skillRevision: "",
+    skillContentHash: "",
+    model: "test",
+    htmlSha256: "",
+    imageStatus: "none",
+    usage: { inputTokens: null, outputTokens: null },
+    decisions: [],
+  }, await store.epoch());
+  await mount(article.title);
+  const click = async (button: HTMLElement) => {
+    await act(async () => {
+      button.click();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+  };
+  await click(host.querySelector<HTMLButtonElement>('[aria-label="下载与导出"]')!);
+  const formats = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+  expect(formats.map((button) => button.textContent)).toEqual([
+    expect.stringContaining("完整版 HTML"),
+    expect.stringContaining("下载 PDF (.pdf)"),
+    expect.stringContaining("下载图片 (.png)"),
+    expect.stringContaining("Markdown 原稿"),
+  ]);
+  expect(formats[0].disabled).toBe(false);
+  expect(formats[1].disabled).toBe(false);
+  expect(formats[2].disabled).toBe(false);
+  await click(host.querySelector<HTMLButtonElement>('[aria-label="下载与导出"]')!);
+  await click(host.querySelector<HTMLButtonElement>(".preview-inspect-btn")!);
+  const restore = [...host.querySelectorAll<HTMLButtonElement>("button")]
+    .find((button) => button.textContent === "恢复此处原文")!;
+  await click(restore);
+  expect(host.textContent).toContain("已恢复此处原文");
+  const [newVersion] = await store.listVersions(article.id);
+  expect((await store.getResult(newVersion.id)).validation.ready).toBe(true);
+  expect((await store.getArticle(article.id)).sourceMarkdown).toBe(article.sourceMarkdown);
+  await click(host.querySelector<HTMLButtonElement>(".toast-action")!);
+  expect(host.textContent).toContain("已撤销，成稿恢复到修改前");
+  expect((await store.listVersions(article.id)).map((entry) => entry.id)).toEqual(["review-draft"]);
+  expect(host.textContent).toContain("待核对的原文差异（1）");
+});
+
+it("shows progress, then locates a newly failed job from its one-time notice", async () => {
   await store.putMeta("preferences", {
     theme: "moyu-green",
     mode: "format_only",
@@ -745,28 +821,83 @@ it("shows running progress canvas, non-blocking edit hint, and persistent job al
     "本次排版正基于提交时的快照",
   );
   await act(async () => {
-    capturedOnStatus({
+    const failed = {
       id: "job_run_test",
       articleId: article.id,
       sourceRevision: 1,
-      status: "outcome_unknown",
+      status: "outcome_unknown" as const,
       stage: "generate",
       callCount: 1,
       sent: false,
       startedAt: Date.now() / 1000,
       error: { message: "网络连接中断，结果未知" },
-    });
+    };
+    await (await store.database).put("jobs", failed, failed.id);
+    capturedOnStatus(failed);
     rejectRun(new Error("网络连接中断，结果未知"));
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
-  expect(host.querySelector(".job-alert")?.textContent).toContain(
-    "计费结果未知",
-  );
+  const alert = host.querySelector(".job-alert")!;
+  expect(alert.textContent).toContain("本次排版结果未知，可能已计费");
+  expect(host.querySelector(".error-alert")).toBeNull();
+  const viewRecord = alert.querySelector<HTMLButtonElement>(".text-button")!;
+  expect(viewRecord.textContent).toBe("查看记录");
+  await act(async () => viewRecord.click());
+  const row = host.querySelector(".failed-version");
+  expect(row?.textContent).toContain("网络连接中断，结果未知");
+  expect(document.activeElement).toBe(row);
+  expect(host.querySelector(".job-alert")).toBeNull();
+
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await mount("运行测试稿-等待期微调");
+  expect(host.querySelector(".job-alert")).toBeNull();
   await act(async () => {
-    host
-      .querySelector<HTMLButtonElement>('button[aria-label="关闭异常提示"]')!
-      .click();
+    host.querySelector<HTMLButtonElement>('[aria-label="历史版本"]')!.click();
   });
+  expect(host.querySelector(".failed-version")).not.toBeNull();
+});
+
+it("keeps wallet recovery actionable without replaying old job alerts", async () => {
+  const article = await store.createArticle("充值提示测试稿", "原文。");
+  const failedJob = {
+    id: "job_top_up",
+    articleId: article.id,
+    sourceRevision: article.revision,
+    status: "failed" as const,
+    stage: "generate",
+    callCount: 1,
+    sent: true,
+    startedAt: Date.now() / 1000,
+    error: {
+      message: "平台请求失败（HTTP 402），请按钱包提示处理",
+      recoveryAction: "top_up_balance",
+    },
+  };
+  await (await store.database).put("jobs", failedJob, failedJob.id);
+  const wallet = { connected: true, remember: false, balanceYuan: 0 };
+  vi.mocked(walletModule.walletStatus).mockResolvedValue({
+    ...wallet, recoveryAction: "top_up_balance",
+  });
+  await mount(article.title);
+
+  expect(host.querySelector(".job-alert")).toBeNull();
+  const hint = host.querySelector(".wallet-recovery-hint")!;
+  expect(hint.textContent).toContain("TokenDance 钱包余额不足");
+  const recharge = hint.querySelector("a")!;
+  expect(recharge.href).toBe("https://tokendance.space/credits");
+  expect(recharge.target).toBe("_blank");
+
+  vi.mocked(walletModule.walletStatus).mockResolvedValue({
+    ...wallet, recoveryAction: "reauthorize_api_key",
+  });
+  await act(async () => store.changed());
+  await vi.waitFor(() => {
+    expect(host.querySelector(".wallet-recovery-hint a")).toBeNull();
+    expect(hint.textContent).toContain("钱包授权已失效");
+  });
+  await act(async () => hint.querySelector("button")!.click());
+  expect(host.querySelector(".wallet-content")?.textContent).toContain("重新授权");
   expect(host.querySelector(".job-alert")).toBeNull();
 });
 

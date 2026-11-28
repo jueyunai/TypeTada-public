@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { version } from "../package.json";
 import * as store from "../src/db";
 import {
   authorizeUrl,
@@ -20,6 +21,8 @@ import {
 let requests: any[] = [];
 let replaceOutput: ((value: string) => string) | undefined;
 let interrupt = false;
+let traceparents: string[] = [];
+let interruptBody = false;
 function response(request: any) {
   const payload = JSON.parse(request.body);
   requests.push(payload);
@@ -47,6 +50,8 @@ beforeEach(async () => {
   requests = [];
   replaceOutput = undefined;
   interrupt = false;
+  traceparents = [];
+  interruptBody = false;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: any) => {
@@ -54,8 +59,20 @@ beforeEach(async () => {
         return new Response(JSON.stringify({ key: "test-personal-key" }));
       if (String(url) === ENDPOINTS.chat) {
         expect(init.headers["X-App-URL"]).toBe("https://example.com");
+        const traceparent = new Headers(init.headers).get("traceparent")!;
+        expect(traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+        traceparents.push(traceparent);
         if (interrupt) throw new TypeError("network");
-        return response(init);
+        const traceId = traceparent.split("-")[1];
+        const headers = { "X-Trace-Id": traceId };
+        if (interruptBody) {
+          return new Response(new ReadableStream({
+            start(controller) { controller.error(new Error("body interrupted")); },
+          }), { headers });
+        }
+        const successful = response(init);
+        successful.headers.set("X-Trace-Id", traceId);
+        return successful;
       }
       if (String(url).startsWith("/library/"))
         return new Response(readFileSync("public" + url, "utf8"));
@@ -77,6 +94,11 @@ it("completes generation locally with exact attribution; result survives data re
     () => {},
   );
   expect(requests).toHaveLength(1);
+  const traceId = traceparents[0].split("-")[1];
+  expect((await store.latestJob(article.id))?.attempts?.[0]).toMatchObject({
+    traceId,
+    platformTraceId: traceId,
+  });
   expect(JSON.parse(requests[0].messages[1].content).layoutMonth).toMatch(
     /^\d{4} \/ \d{2}$/,
   );
@@ -165,7 +187,7 @@ it("repairs fenced sibling sections and missing leaf spans before requesting ano
   expect(job.attempts?.[0].validation?.ready).toBe(true);
   expect(await store.getFailureResponses(job.id)).toBeUndefined();
 });
-it("retains both failed attempts without putting model text or credentials in the default report", async () => {
+it("blocks unsafe output after one attempt and keeps model text out of the default report", async () => {
   replaceOutput = (html) =>
     html.replace("19.9", "199") + "额外文字不应静默删掉";
   const article = await store.createArticle("测试", "价格19.9元。");
@@ -177,21 +199,11 @@ it("retains both failed attempts without putting model text or credentials in th
       () => {},
     ),
   ).rejects.toThrow("未通过");
-  expect(requests).toHaveLength(2);
-  const repair = JSON.parse(
-    requests[1].messages.at(-1).content.split("重新输出完整正文：")[1],
-  );
-  expect(repair.locations).toEqual({
-    changedSource: [
-      { sourceId: "s001", expected: "价格19.9元。", actual: "价格199元。" },
-    ],
-    security: ["正文必须只有一个section根节点"],
-  });
+  expect(requests).toHaveLength(1);
   expect(await store.listVersions(article.id)).toEqual([]);
   const job = (await store.latestJob(article.id))!;
   expect(job.attempts?.map((attempt) => attempt.stage)).toEqual([
     "generate",
-    "repair",
   ]);
   for (const attempt of job.attempts ?? []) {
     expect(attempt.validation?.errors).toContain("原文s001文字变化");
@@ -200,9 +212,14 @@ it("retains both failed attempts without putting model text or credentials in th
     );
   }
   const responses = (await store.getFailureResponses(job.id))!;
-  expect(responses).toHaveLength(2);
+  expect(responses).toHaveLength(1);
   expect(responses[0].content).toContain("额外文字不应静默删掉");
   const report = layoutFailureReport(job);
+  expect(job.appVersion).toBe(version);
+  expect(JSON.parse(report)).toMatchObject({
+    schemaVersion: 1,
+    appVersion: version,
+  });
   expect(report).not.toMatch(/价格|test-personal-key|额外文字不应静默删掉/);
   expect(
     JSON.parse(layoutFailureReport(job, responses)).modelResponses,
@@ -214,6 +231,14 @@ it("retains both failed attempts without putting model text or credentials in th
 it("leaves unknown call ledger after a network failure and does not retry", async () => {
   interrupt = true;
   const article = await store.createArticle("测试", "原文。");
+  const platformFetch = fetch;
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    if (url === ENDPOINTS.chat) {
+      const traceId = new Headers(init.headers).get("traceparent")?.split("-")[1];
+      expect((await store.latestJob(article.id))?.attempts?.[0]).toMatchObject({ traceId });
+    }
+    return platformFetch(url, init);
+  });
   await expect(
     generateLayout(
       article,
@@ -222,8 +247,31 @@ it("leaves unknown call ledger after a network failure and does not retry", asyn
       () => {},
     ),
   ).rejects.toThrow("未知");
-  expect((await store.latestJob(article.id))?.status).toBe("outcome_unknown");
-  expect((await store.latestJob(article.id))?.callCount).toBe(1);
+  const job = (await store.latestJob(article.id))!;
+  expect(job.status).toBe("outcome_unknown");
+  expect(job.callCount).toBe(1);
+  expect(traceparents).toHaveLength(1);
+  expect(JSON.parse(layoutFailureReport(job)).attempts[0]).toMatchObject({
+    traceId: traceparents[0].split("-")[1],
+  });
+  expect(job.attempts?.[0].platformTraceId).toBeUndefined();
+});
+it("keeps the platform trace ID when the response body cannot be read", async () => {
+  interruptBody = true;
+  const article = await store.createArticle("读取中断", "原文。");
+  await expect(generateLayout(
+    article,
+    { ...DEFAULT_PREFERENCES, consent: true },
+    new AbortController(),
+    () => {},
+  )).rejects.toThrow("响应读取中断");
+  const job = (await store.latestJob(article.id))!;
+  const traceId = traceparents[0].split("-")[1];
+  expect(JSON.parse(layoutFailureReport(job))).toMatchObject({
+    status: "outcome_unknown",
+    callCount: 1,
+    attempts: [{ traceId, platformTraceId: traceId }],
+  });
 });
 it("rejects forged backup HTML instead of trusting imported ready flags", async () => {
   const article = await store.createArticle("测试", "原文。");
@@ -513,29 +561,51 @@ it("keeps unified hard/soft gates across generation, copyRichText, and backup ro
   expect(imported).toEqual({ articles: 1, results: 1 });
 });
 
-it("passes outOfOrder locations in repair requests when source paragraphs are reordered", async () => {
+it("keeps a safe draft and only sends one repair call after it is requested", async () => {
   let callIndex = 0;
   replaceOutput = (html) => {
     callIndex++;
-    if (callIndex === 1) {
+    if (callIndex <= 2) {
       return '<section style="text-align:left"><p><span leaf="">第二段。</span></p><p><span leaf="">第一段。</span></p></section>';
     }
     return html;
   };
   const article = await store.createArticle("乱序定位", "第一段。\n\n第二段。");
-  const result = await generateLayout(
+  const prefs = { ...DEFAULT_PREFERENCES, consent: true };
+  const draft = await generateLayout(
     article,
-    { ...DEFAULT_PREFERENCES, consent: true },
+    prefs,
     new AbortController(),
     () => {},
   );
+  expect(requests).toHaveLength(1);
+  expect(draft.validation.ready).toBe(false);
+  expect(draft.reviewIssues).toEqual([expect.objectContaining({ kind: "out_of_order" })]);
+  expect(await store.listVersions(article.id)).toEqual([expect.objectContaining({ id: draft.resultId, needsReview: true })]);
+  expect(() => copyRichText(draft)).toThrow("不能复制");
+
+  const repairDraft = () => generateLayout(article, prefs, new AbortController(), () => {}, draft);
+  await expect(repairDraft()).rejects.toThrow("原待核对稿已保留");
   expect(requests).toHaveLength(2);
-  expect(result.validation.ready).toBe(true);
+  expect(await store.getResult(draft.resultId)).toEqual(draft);
+  expect(await store.listVersions(article.id)).toHaveLength(1);
   const repairPayload = JSON.parse(
     requests[1].messages.at(-1).content.split("重新输出完整正文：")[1],
   );
   expect(repairPayload.errors).toContain("原文s002顺序变化");
   expect(repairPayload.locations.outOfOrder[0].sourceId).toBe("s002");
+  const result = await repairDraft();
+  expect(requests).toHaveLength(3);
+  expect(new Set(traceparents.map((header) => header.split("-")[1])).size).toBe(3);
+  expect(result.validation.ready).toBe(true);
+  expect(result.reviewIssues).toBeUndefined();
+  expect(await store.listVersions(article.id)).toHaveLength(2);
+
+  const backup = await exportBackup(article.id);
+  await store.clearLocal();
+  expect(await importBackup({ size: backup.length, text: async () => backup } as File)).toEqual({ articles: 1, results: 2 });
+  const [restored] = await store.listArticles();
+  expect((await store.listVersions(restored.id)).map((v) => v.needsReview)).toContain(true);
 });
 
 it("preserves non-blocking width compatibility warnings after backup import", async () => {

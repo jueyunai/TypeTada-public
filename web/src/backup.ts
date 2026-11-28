@@ -185,16 +185,25 @@ export async function importBackup(file: File) {
     }
     const marked = serialize(dom);
     const manifest = sourceManifest(source),
-      // 与生成、复制统一使用同一套硬错误与非阻断宽度提示口径
       checked = checkResult(marked, manifest.blocks, manifest.images);
-    if (!checked.validation.ready)
+    if (
+      !checked.validation.ready &&
+      !(Array.isArray(input.reviewIssues) && input.reviewIssues.length && checked.reviewIssues?.length)
+    )
       throw new Error(
         "备份中的版本未通过安全/原文检查：" +
           checked.validation.errors.slice(0, 3).join("；"),
       );
     const fragment = hydrateImages(checked.htmlFragment, imageMap);
+    const reviewAcceptedAt =
+      typeof input.reviewAcceptedAt === "number" &&
+      Number.isFinite(input.reviewAcceptedAt) &&
+      checked.reviewIssues?.length
+        ? input.reviewAcceptedAt
+        : undefined;
     results.push({
       ...checked,
+      ...(reviewAcceptedAt ? { reviewAcceptedAt } : {}),
       resultId: id("result"),
       articleId,
       createdAt:
@@ -255,7 +264,16 @@ export async function importBackup(file: File) {
           typeof p.theme === "string" && /^[a-z0-9-]+$/.test(p.theme)
             ? p.theme
             : DEFAULT_PREFERENCES.theme,
-        mode: p.mode === "auto" ? "auto" : "format_only",
+        mode:
+          p.mode === "auto" || p.mode === "blindbox" ? p.mode : "format_only",
+        blindBoxStyle:
+          typeof (p as { blindBoxStyle?: unknown }).blindBoxStyle === "string" &&
+          ["random", "tech", "minimal", "magazine"].includes(
+            (p as { blindBoxStyle?: string }).blindBoxStyle!,
+          )
+            ? (p as { blindBoxStyle: "random" | "tech" | "minimal" | "magazine" })
+                .blindBoxStyle
+            : "random",
         authorMode: ["preserve", "custom", "none"].includes(p.authorMode)
           ? p.authorMode
           : "preserve",

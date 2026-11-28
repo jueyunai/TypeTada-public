@@ -4,6 +4,7 @@ import {
   addedPlaceholders,
   checkResult,
   inert,
+  restoreOriginalBlock,
   serialize,
   sha256,
   sourceManifest,
@@ -110,14 +111,39 @@ export async function saveLocalEdit(
   markedHtml: string,
   note: string,
 ) {
+  const generation = await epoch();
   const { blocks, images } = sourceManifest(result.sourceMarkdown);
   const checked = checkResult(markedHtml, blocks, images);
   if (!checked.validation.ready)
     throw new Error("这个修改会影响原文，已取消，原来的成稿没有变化。");
+  return saveCheckedEdit(result, checked, note, generation);
+}
+
+export async function restoreLayoutSource(
+  result: LayoutResult,
+  sourceId: string,
+) {
+  const generation = await epoch();
+  const { blocks, images } = sourceManifest(result.sourceMarkdown);
+  const checked =
+    result.sourceHtml &&
+    restoreOriginalBlock(result.sourceHtml, blocks, images, sourceId);
+  if (!checked)
+    throw new Error("这处差异无法准确定位，原成稿已保留。");
+  return saveCheckedEdit(result, checked, "已在本机恢复一处原文。", generation);
+}
+
+async function saveCheckedEdit(
+  result: LayoutResult,
+  checked: ReturnType<typeof checkResult>,
+  note: string,
+  generation: number,
+) {
   const fragment = hydrateImages(checked.htmlFragment, await imageMap());
   const next: LayoutResult = {
     ...result,
     ...checked,
+    reviewAcceptedAt: undefined,
     notice: undefined,
     htmlFragment: fragment,
     htmlSha256: await sha256(fragment),
@@ -125,6 +151,6 @@ export async function saveLocalEdit(
     createdAt: Date.now() / 1000,
     decisions: [...result.decisions, note],
   };
-  await saveResult(next, await epoch());
+  await saveResult(next, generation);
   return next;
 }

@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronLeft,
   Copy,
+  Dices,
   FileText,
   FolderDown,
   FolderUp,
@@ -37,6 +38,7 @@ import {
   Search,
   Settings2,
   ShieldCheck,
+  Shuffle,
   Smartphone,
   Sparkles,
   Trash2,
@@ -45,16 +47,21 @@ import {
   X,
 } from "lucide-react";
 import {
+  canDownloadLayout,
   copyRichText,
   previewDocument,
   download,
   exportResult,
+  isResultUsable,
   layoutFailureFilename,
   layoutFailureReport,
 } from "./output";
 import * as local from "./db";
+import type { RenderExportFormat } from "./render-export";
+import { diffBlockText } from "./diff";
 import { sourceManifest } from "./content";
 import {
+  APP_VERSION,
   AUTH_CONFIG_ERROR,
   GENERATION_CONFIG_ERROR,
   GITHUB_REPOSITORY_URL,
@@ -70,10 +77,32 @@ import {
   setRemember,
   type Wallet as WalletState,
 } from "./wallet";
+import {
+  BLIND_BOX_STYLES,
+  blindBoxStyleLabel,
+  formatBlindBoxLabel,
+  isBlindBoxThemeId,
+} from "./blindbox";
+
+const BLIND_BOX_SWATCHES: Record<
+  NonNullable<Preferences["blindBoxStyle"]>,
+  string[]
+> = {
+  random: ["#047857", "#1E4FD0", "#DC2626", "#9A4A1C"],
+  tech: ["#1E4FD0", "#6D28D9", "#0F766E", "#1E293B"],
+  minimal: ["#3D5A4C", "#44403C", "#334155", "#9A4A1C"],
+  magazine: ["#047857", "#DC2626", "#0F4C81", "#C2410C"],
+};
 import { themes as listThemes, loadDemo } from "./library";
-import { generateLayout, UnsavedResult } from "./pipeline";
+import {
+  generateLayout,
+  recoverFailedLayout,
+  recoverFromFailureReportFile,
+  UnsavedResult,
+} from "./pipeline";
 import {
   describeResult,
+  describeBlock,
   formatTokens,
   friendlyJobMessage,
   friendlyLocation,
@@ -85,9 +114,11 @@ import {
 import {
   fillAuthorPlaceholders,
   removePlaceholderParagraphs,
+  restoreLayoutSource,
   saveLocalEdit,
 } from "./fixes";
 import { importImage } from "./images";
+import { readPaste } from "./paste";
 import {
   SourceRichEditor,
   type RichPastePayload,
@@ -107,6 +138,8 @@ import {
   type Version,
   type Preferences,
 } from "./types";
+
+const TOKEN_DANCE_CREDITS_URL = "https://tokendance.space/credits";
 
 // Shown only when the deploying site configures its own filing numbers.
 const filingLinks =
@@ -502,7 +535,13 @@ export default function App() {
     [wallet, setWallet] = useState<WalletState | null>(null),
     [job, setJob] = useState<Job | null>(null),
     [globalJob, setGlobalJob] = useState<Job | null>(null),
-    [versions, setVersions] = useState<Version[]>([]);
+    [versions, setVersions] = useState<Version[]>([]),
+    [failedJobs, setFailedJobs] = useState<Job[]>([]),
+    [recoverableJobIds, setRecoverableJobIds] = useState<Set<string>>(
+      () => new Set(),
+    ),
+    [recoveringJobId, setRecoveringJobId] = useState<string | null>(null),
+    [restoringSource, setRestoringSource] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<
       | "themes"
       | "history"
@@ -517,10 +556,12 @@ export default function App() {
     [stickyNotice, setStickyNotice] = useState(""),
     [error, setError] = useState(""),
     [toasts, setToasts] = useState<ToastItem[]>([]),
-    [dismissedJobId, setDismissedJobId] = useState<string | null>(null),
+    [failureNotice, setFailureNotice] = useState<Job | null>(null),
+    [historyTarget, setHistoryTarget] = useState<string | null>(null),
     [confirmModal, setConfirmModal] = useState<ConfirmDialog | null>(null),
     [fullscreenPreview, setFullscreenPreview] = useState(false),
     [downloadMenuOpen, setDownloadMenuOpen] = useState(false),
+    [exportingFormat, setExportingFormat] = useState<RenderExportFormat | null>(null),
     [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [authorFormOpen, setAuthorFormOpen] = useState(false);
   const [authorDraft, setAuthorDraft] = useState({ name: "", bio: "" });
@@ -530,6 +571,8 @@ export default function App() {
     [mobileTab, setMobileTab] = useState("source"),
     [navOpen, setNavOpen] = useState(false);
   const [mode, setMode] = useState<Preferences["mode"]>("format_only"),
+    [blindBoxStyle, setBlindBoxStyle] =
+      useState<NonNullable<Preferences["blindBoxStyle"]>>("random"),
     [authorMode, setAuthorMode] =
       useState<Preferences["authorMode"]>("preserve"),
     [name, setName] = useState(""),
@@ -542,7 +585,14 @@ export default function App() {
     [assets, setAssets] = useState<Asset[]>([]),
     [search, setSearch] = useState(""),
     [previewTheme, setPreviewTheme] = useState<Theme | null>(null),
+    [themeDrawerTab, setThemeDrawerTab] = useState<"presets" | "blindbox">(
+      "presets",
+    ),
     [articleBusy, setArticleBusy] = useState(false);
+  useEffect(() => {
+    if (drawer !== "themes") return;
+    setThemeDrawerTab(mode === "blindbox" ? "blindbox" : "presets");
+  }, [drawer]);
   const assetUrlMap = useMemo(
     () => new Map(assets.map((asset) => [asset.id, asset.url])),
     [assets],
@@ -565,6 +615,8 @@ export default function App() {
     };
   }, [ready]);
   const drawerRef = useRef<HTMLElement>(null),
+    historyRowRef = useRef<HTMLDivElement>(null),
+    historyButtonRef = useRef<HTMLButtonElement>(null),
     fullscreenRef = useRef<HTMLDivElement>(null),
     confirmRef = useRef<HTMLDivElement>(null),
     downloadMenuRef = useRef<HTMLDivElement>(null),
@@ -585,6 +637,7 @@ export default function App() {
     fileRef = useRef<HTMLInputElement>(null),
     imageRef = useRef<HTMLInputElement>(null),
     backupRef = useRef<HTMLInputElement>(null),
+    reportRef = useRef<HTMLInputElement>(null),
     mutationRef = useRef(false),
     deletingRef = useRef(new Set<string>()),
     activeTask = useRef<{ id?: string; controller: AbortController } | null>(
@@ -596,8 +649,14 @@ export default function App() {
     setWidthState(next);
   }, []);
   const showError = useCallback(
-    (e: unknown) =>
-      setError(e instanceof Error ? e.message : "操作未完成，请稍后重试"),
+    (e: unknown) => {
+      const message = e instanceof Error ? e.message : "操作未完成，请稍后重试";
+      setError(
+        /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed|unable to preload css/i.test(message)
+          ? "页面资源加载失败。请等排版结束并确认原稿已保存，再刷新后重试。"
+          : message,
+      );
+    },
     [],
   );
   const dismissToast = useCallback((toastId: number) => {
@@ -612,13 +671,15 @@ export default function App() {
     if (!value) return;
     const itemId = ++toastSeq.current;
     setToasts((old) => [...old.slice(-2), { id: itemId, text: value, action }]);
-    const timer = window.setTimeout(
-      () => {
-        toastTimers.current.delete(itemId);
-        setToasts((old) => old.filter((item) => item.id !== itemId));
-      },
-      action ? 8000 : 3600,
-    );
+    const durationMs = action
+      ? 6000
+      : [...value].length <= 20
+        ? 1800
+        : 3200;
+    const timer = window.setTimeout(() => {
+      toastTimers.current.delete(itemId);
+      setToasts((old) => old.filter((item) => item.id !== itemId));
+    }, durationMs);
     toastTimers.current.set(itemId, timer);
   }, []);
   useEffect(() => {
@@ -648,6 +709,7 @@ export default function App() {
   const prefs: Preferences = {
     theme,
     mode,
+    blindBoxStyle,
     authorMode,
     name,
     bio,
@@ -658,6 +720,7 @@ export default function App() {
   function applyPrefs(p: Preferences) {
     setTheme(p.theme);
     setMode(p.mode);
+    setBlindBoxStyle(p.blindBoxStyle ?? "random");
     setAuthorMode(p.authorMode);
     setName(p.name);
     setBio(p.bio);
@@ -680,14 +743,29 @@ export default function App() {
     if (next.connected) setRememberWallet(next.remember);
     return next;
   }, []);
+  const refreshHistory = useCallback(async (articleId?: string) => {
+    const idToLoad = articleId ?? docRef.current?.id;
+    if (!idToLoad) return;
+    const [v, fj, capIds] = await Promise.all([
+      local.listVersions(idToLoad),
+      local.listFailedJobs(idToLoad),
+      local.listFailureCaptureJobIds(),
+    ]);
+    if (docRef.current?.id !== idToLoad) return;
+    setVersions(v);
+    setFailedJobs(fj);
+    setRecoverableJobIds(capIds);
+  }, []);
   const openArticle = useCallback(
     async (article: Article, background = false) => {
       const before = docRef.current;
       const seq = ++loadSeq.current;
-      const [fresh, history, j] = await Promise.all([
+      const [fresh, history, j, failed, capIds] = await Promise.all([
         local.getArticle(article.id),
         local.listVersions(article.id),
         local.latestJob(article.id),
+        local.listFailedJobs(article.id),
+        local.listFailureCaptureJobIds(),
       ]);
       if (seq !== loadSeq.current) return;
       let selected = fresh;
@@ -720,6 +798,8 @@ export default function App() {
       // 打开或新建文章默认进入所见即所得「写作」态
       setSourceView("rich");
       setVersions(history);
+      setFailedJobs(failed);
+      setRecoverableJobIds(capIds);
       setSaveState(selected === fresh ? "已保存到本机" : "等待保存");
       setNavOpen(false);
       setJob(j);
@@ -795,6 +875,7 @@ export default function App() {
     ready,
     theme,
     mode,
+    blindBoxStyle,
     authorMode,
     name,
     bio,
@@ -864,6 +945,8 @@ export default function App() {
           setDoc(null);
           setResult(null);
           setVersions([]);
+          setFailedJobs([]);
+          setRecoverableJobIds(new Set());
           setJob(null);
           savedRef.current = "";
           setStickyNotice("当前文章已在另一窗口删除或本地数据已清除。");
@@ -882,6 +965,7 @@ export default function App() {
         }
         const j = await local.latestJob(current.id);
         if (j && activeTask.current?.id !== j.id) setJob(j);
+        await refreshHistory(current.id);
       } catch (e) {
         showError(e);
       }
@@ -892,6 +976,7 @@ export default function App() {
     refreshArticles,
     refreshWallet,
     openArticle,
+    refreshHistory,
     dataEpoch,
     ready,
     showError,
@@ -965,8 +1050,35 @@ export default function App() {
     drawerRef.current
       ?.querySelector<HTMLElement>("button,input,select,textarea,a,summary")
       ?.focus();
-    return () => previous?.focus();
+    return () => {
+      if (previous?.isConnected) previous.focus();
+      else if (drawer === "history") historyButtonRef.current?.focus();
+    };
   }, [drawer]);
+  const currentFailure =
+    failureNotice?.articleId === doc?.id ? failureNotice : null;
+  const visibleHistoryTarget =
+    drawer === "history" && failedJobs.some((entry) => entry.id === historyTarget)
+      ? historyTarget
+      : null;
+  useEffect(() => {
+    if (!failureNotice) return;
+    if (drawer === "history" && currentFailure)
+      setHistoryTarget(currentFailure.id);
+    if (!currentFailure || drawer === "history") {
+      setFailureNotice(null);
+    }
+  }, [currentFailure, drawer, failureNotice]);
+  useEffect(() => {
+    if (!failureNotice) return;
+    const timer = window.setTimeout(() => setFailureNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [failureNotice]);
+  useEffect(() => {
+    if (!visibleHistoryTarget) return;
+    historyRowRef.current?.focus({ preventScroll: true });
+    historyRowRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [visibleHistoryTarget]);
   useEffect(() => {
     if (!fullscreenPreview) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -1201,7 +1313,11 @@ export default function App() {
       setBusy(false);
     }
   }
-  async function startLayout(confirmed = false) {
+  async function startLayout(
+    confirmed = false,
+    draft?: LayoutResult,
+    options?: { skipRepeatConfirm?: boolean },
+  ) {
     if (!doc?.sourceMarkdown.trim() || activeTask.current) return;
     if (GENERATION_CONFIG_ERROR) {
       showError(new Error(GENERATION_CONFIG_ERROR));
@@ -1218,6 +1334,8 @@ export default function App() {
     }
     if (confirmed) setConsent(true);
     if (
+      !draft &&
+      !options?.skipRepeatConfirm &&
       job &&
       finished.has(job.status) &&
       job.status !== "cancelled" &&
@@ -1231,9 +1349,10 @@ export default function App() {
       }))
     )
       return;
+    if (activeTask.current) return;
     const controller = new AbortController();
     activeTask.current = { controller };
-    setDismissedJobId(null);
+    setFailureNotice(null);
     setBusy(true);
     setError("");
     try {
@@ -1247,24 +1366,107 @@ export default function App() {
           if (activeTask.current) activeTask.current.id = next.id;
           if (docRef.current?.id === next.articleId) setJob(next);
         },
+        draft,
+        mode === "blindbox" && !draft ? result?.blindBoxBrief : undefined,
       );
       if (docRef.current?.id === saved.id) {
         setResult(value);
-        setVersions(await local.listVersions(saved.id));
+        await refreshHistory(saved.id);
         setMobileTab("preview");
-        pushToast(value.notice ?? "排版已完成，可以复制了。");
+        if (value.validation.ready)
+          pushToast(value.notice ?? "排版已完成，可以复制了。");
       }
     } catch (e) {
       if (
         e instanceof UnsavedResult &&
         docRef.current?.id === e.result.articleId
-      )
+      ) {
         setResult(e.result);
-      showError(e);
+        showError(e);
+        return;
+      }
+      const taskId = activeTask.current?.id;
+      const failed = taskId ? await local.getJob(taskId).catch(() => null) : null;
+      if (
+        failed &&
+        (failed.status === "failed" || failed.status === "outcome_unknown")
+      ) {
+        if (failed.articleId === docRef.current?.id && !controller.signal.aborted)
+          setFailureNotice(failed);
+      } else if (!controller.signal.aborted) {
+        showError(e);
+      }
     } finally {
       activeTask.current = null;
       setBusy(false);
+      await refreshHistory().catch(() => {});
       await refreshWallet(true).catch(() => {});
+    }
+  }
+  async function requestRepair(draft: LayoutResult) {
+    if (activeTask.current || draft !== result || stale) return;
+    if (!wallet?.connected) {
+      setDrawer("wallet");
+      return;
+    }
+    if (
+      !(await askConfirm({
+        title: "用 AI 修复这份稿子？",
+        message:
+          "原稿和成稿将交给 TokenDance 和模型处理。这次修复会额外消耗 Token，原待核对稿会保留。" +
+          (job?.status === "outcome_unknown"
+            ? "上次请求结果未知，也可能已计费。"
+            : ""),
+        confirmText: "确认并修复",
+        cancelText: "先不修复",
+      }))
+    )
+      return;
+    setDrawer(null);
+    await startLayout(true, draft);
+  }
+  async function showLocalEdit(
+    target: LayoutResult,
+    next: LayoutResult,
+    message: string,
+  ) {
+    if (docRef.current?.id !== next.articleId) return;
+    setResult((current) => current?.resultId === target.resultId ? next : current);
+    await refreshHistory(next.articleId);
+    pushToast(message, {
+      label: "撤销",
+      run: () =>
+        void (async () => {
+          try {
+            const [latest] = await local.listVersions(next.articleId);
+            if (latest?.id !== next.resultId) {
+              pushToast("已保存更新的成稿，可在历史版本查看修改前的稿子。");
+              return;
+            }
+            const previous = await local.getResult(target.resultId);
+            await local.deleteResult(next.resultId);
+            setResult((current) =>
+              current?.resultId === next.resultId ? previous : current,
+            );
+            await refreshHistory(previous.articleId);
+            pushToast("已撤销，成稿恢复到修改前。");
+          } catch (e) {
+            showError(e);
+          }
+        })(),
+    });
+  }
+  async function restoreDifference(target: LayoutResult, sourceId: string) {
+    if (restoringSource || busy || activeTask.current || target !== result || stale)
+      return;
+    setRestoringSource(sourceId);
+    try {
+      const next = await restoreLayoutSource(target, sourceId);
+      await showLocalEdit(target, next, "已恢复此处原文，可撤销。");
+    } catch (e) {
+      showError(e);
+    } finally {
+      setRestoringSource(null);
     }
   }
   async function applyNoticeAction(
@@ -1331,36 +1533,50 @@ export default function App() {
           : "在本机删除了模板文字，没有调用模型。",
       );
       setAuthorFormOpen(false);
-      setResult(next);
-      setVersions(await local.listVersions(next.articleId));
-      pushToast(
+      await showLocalEdit(
+        target,
+        next,
         action === "fill_author"
           ? "署名已填入成稿，没有调用模型。"
           : "已删掉这一段，没有调用模型。",
-        {
-          label: "撤销",
-          run: () =>
-            void (async () => {
-              try {
-                // The earlier version is still saved; drop the edited copy.
-                await local.deleteResult(next.resultId);
-                const previous = await local.getResult(target.resultId);
-                setResult((current) =>
-                  current?.resultId === next.resultId ? previous : current,
-                );
-                setVersions(await local.listVersions(previous.articleId));
-                pushToast("已撤销，成稿恢复到修改前。");
-              } catch (e) {
-                showError(e);
-              }
-            })(),
-        },
       );
     } catch (e) {
       showError(e);
     }
   }
-  async function handleCopyResult(target: LayoutResult) {
+  async function downloadVisual(target: LayoutResult, format: RenderExportFormat) {
+    if (exportingFormat || !canDownloadLayout(target)) return;
+    setExportingFormat(format);
+    setDownloadMenuOpen(false);
+    pushToast(format === "pdf" ? "正在生成 PDF…" : "正在生成长图…");
+    try {
+      const { createRenderExport } = await import("./render-export");
+      const saved = await createRenderExport(target, format, (missing) =>
+        askConfirm({
+          title: `${missing.length} 张配图无法导出`,
+          message:
+            missing
+              .slice(0, 3)
+              .map((name) => `「${name.slice(0, 40)}」`)
+              .join("、") +
+            (missing.length > 3 ? "等配图" : "") +
+            "会用文字提示代替。想保留配图，可以取消，下载原图并用本机图片重新插入。",
+          confirmText: "仍然下载",
+          cancelText: "取消",
+        }),
+      );
+      if (!saved) return;
+      const title = target.title.replace(/[<>:"/\\|?*]/g, "_").trim().slice(0, 64);
+      const suffix = isResultUsable(target) ? "" : "-待核对";
+      download(saved.file, `${title || "文有样成稿"}${suffix}.${saved.extension}`);
+      pushToast(format === "pdf" ? "已生成 PDF" : "已生成长图");
+    } catch (e) {
+      showError(e);
+    } finally {
+      setExportingFormat(null);
+    }
+  }
+  async function handleAcceptAndCopy(target: LayoutResult) {
     if (
       target === result &&
       stale &&
@@ -1372,9 +1588,47 @@ export default function App() {
       }))
     )
       return;
+    try {
+      copyRichText(target, true);
+      const accepted = await local.acceptReview(target.resultId);
+      setResult((current) =>
+        current?.resultId === accepted.resultId ? accepted : current,
+      );
+      setVersions(await local.listVersions(accepted.articleId));
+      setDrawer(null);
+      pushToast("已确认无误并复制，去公众号编辑器粘贴吧");
+    } catch (e) {
+      showError(e);
+    }
+  }
+  async function handleCopyResult(target: LayoutResult, confirmDraft = false) {
+    if (
+      target === result &&
+      stale &&
+      !(await askConfirm({
+        title: "原稿已修改",
+        message: "这份排版对应较早版本的原稿，确认复制这个历史成稿？",
+        confirmText: "继续复制",
+        cancelText: "取消",
+      }))
+    )
+      return;
+    if (
+      !isResultUsable(target) &&
+      (!confirmDraft ||
+        !target.reviewIssues?.length ||
+        !(await askConfirm({
+          title: "仍然复制此稿？",
+          message: "这份稿子的原文差异会一并复制。粘贴后请核对，再发布。",
+          confirmText: "仍然复制此稿",
+          cancelText: "继续核对",
+          danger: true,
+        })))
+    )
+      return;
     const pending = target.demo ? null : describeResult(target).notices;
     if (
-      pending?.action.length &&
+      !confirmDraft && pending?.action.length &&
       !(await askConfirm({
         title: "还有需要处理的地方",
         message:
@@ -1388,7 +1642,11 @@ export default function App() {
       return;
     }
     try {
-      copyRichText(target);
+      copyRichText(target, confirmDraft);
+      if (confirmDraft) {
+        pushToast("已复制待核对稿，发布前请检查差异。");
+        return;
+      }
       const hints = pending ? pending.action.length + pending.review.length : 0;
       const hintSuffix = hints
         ? `还有 ${hints} 条提示，粘贴后请在公众号里看一眼。`
@@ -1415,7 +1673,6 @@ export default function App() {
     const generation = await local.epoch();
     setBusy(true);
     try {
-      const { readPaste } = await import("./paste");
       const pasted = await readPaste(payload);
       if (
         (await local.epoch()) !== generation ||
@@ -1458,7 +1715,6 @@ export default function App() {
     const generation = await local.epoch();
     setBusy(true);
     try {
-      const { readPaste } = await import("./paste");
       const pasted = await readPaste({ html, text, files });
       if (
         (await local.epoch()) !== generation ||
@@ -1531,8 +1787,10 @@ export default function App() {
       activeTask.current.controller.abort();
     if (target) {
       await local.interruptJob(target.id);
-      if (docRef.current?.id === target.articleId)
+      if (docRef.current?.id === target.articleId) {
         setJob(await local.latestJob(target.articleId));
+        await refreshHistory(target.articleId);
+      }
     }
     await refreshArticles();
     pushToast("已停止后续步骤。已发出的请求可能计费，不会自动重发。");
@@ -1633,6 +1891,7 @@ export default function App() {
         setResult(null);
         savedRef.current = "";
         setVersions([]);
+        setFailedJobs([]);
         setJob(null);
       }
       await local.deleteArticle(target.id);
@@ -1675,6 +1934,62 @@ export default function App() {
       layoutFailureFilename(failedJob, !!responses?.length),
       "application/json",
     );
+  }
+  async function recoverFailure(targetJob: Job) {
+    if (recoveringJobId || busy || activeTask.current) return;
+    setRecoveringJobId(targetJob.id);
+    setError("");
+    try {
+      const saved = await flushSave();
+      if (!saved) return;
+      const value = await recoverFailedLayout(saved, targetJob, prefs);
+      if (docRef.current?.id === saved.id) {
+        setResult(value);
+        setJob(await local.latestJob(saved.id));
+        await refreshHistory(saved.id);
+        setDrawer(null);
+        setMobileTab("preview");
+        pushToast(
+          value.validation.ready
+            ? "已用本地留存的 AI 响应 0 费用恢复成稿，可直接复制。"
+            : "已免费恢复为待核对稿，请确认差异后复制。",
+        );
+      }
+    } catch (e) {
+      showError(e);
+    } finally {
+      setRecoveringJobId(null);
+    }
+  }
+  async function recoverFromReport(file: File) {
+    if (recoveringJobId || busy || activeTask.current) {
+      if (reportRef.current) reportRef.current.value = "";
+      return;
+    }
+    setRecoveringJobId("report");
+    setError("");
+    try {
+      const saved = await flushSave();
+      if (!saved) return;
+      const value = await recoverFromFailureReportFile(saved, file, prefs);
+      if (docRef.current?.id === saved.id) {
+        setResult(value);
+        setJob(await local.latestJob(saved.id));
+        await refreshHistory(saved.id);
+        setDrawer(null);
+        setMobileTab("preview");
+        pushToast(
+          value.validation.ready
+            ? "已从失败报告 0 费用恢复成稿，可直接复制。"
+            : "已从失败报告免费恢复为待核对稿，请确认差异后复制。",
+        );
+      }
+    } catch (e) {
+      showError(e);
+    } finally {
+      setRecoveringJobId(null);
+      if (reportRef.current) reportRef.current.value = "";
+    }
   }
   function downloadSource() {
     if (docRef.current)
@@ -1733,7 +2048,7 @@ export default function App() {
     isRunning = !!job && !finished.has(job.status),
     // 有原稿但未生成成稿且选定了具体主题时，右侧直接展示所选主题样张并加提示标识
     sampleTheme =
-      !display && !isRunning && mode !== "auto" ? selectedTheme : null;
+      !display && !isRunning && mode === "format_only" ? selectedTheme : null;
   const displayTheme = display
     ? themes.find((t) => t.id === display.themeId)
     : sampleTheme;
@@ -1741,7 +2056,9 @@ export default function App() {
       !!doc &&
       JSON.stringify([doc.title, doc.sourceMarkdown]) !== savedRef.current,
     stale =
-      !!doc && !!result && (result.sourceRevision !== doc.revision || dirty),
+      !!doc &&
+      !!result &&
+      (result.sourceRevision !== doc.revision || result.sourceMarkdown !== doc.sourceMarkdown || dirty),
     editingWhileRunning =
       isRunning &&
       !!doc &&
@@ -1762,7 +2079,13 @@ export default function App() {
       return [];
     }
   }, [doc, job]);
-  const canFixDisplay = !!display && !display.demo && !!display.sourceHtml;
+  const draftIssues = display?.reviewIssues;
+  const hasReviewIssues = !!draftIssues?.length;
+  const reviewAccepted = hasReviewIssues && !!display?.reviewAcceptedAt;
+  const hasDraft = hasReviewIssues && !display?.reviewAcceptedAt;
+  const isDisplayUsable = !!display && isResultUsable(display);
+  const canFixDisplay =
+    !!display?.validation.ready && !display.demo && !!display.sourceHtml;
   const highlight = useRef<(() => void) | null>(null);
   const locateInPreview = useCallback(
     (path: number[] | null | undefined) => {
@@ -1887,11 +2210,11 @@ export default function App() {
       !busy &&
       !isRunning &&
       !articleBusy,
-    themeChanged = !!result && mode !== "auto" && theme !== result.themeId,
-    jobFailedAlert =
-      !!job &&
-      (job.status === "failed" || job.status === "outcome_unknown") &&
-      dismissedJobId !== job.id;
+    themeChanged =
+      !!result &&
+      ((mode === "format_only" && theme !== result.themeId) ||
+        (mode === "blindbox" && !isBlindBoxThemeId(result.themeId))),
+    walletRecovery = wallet?.recoveryAction;
 
   let nextStep = "";
   if (GENERATION_CONFIG_ERROR) nextStep = GENERATION_CONFIG_ERROR;
@@ -1905,7 +2228,8 @@ export default function App() {
   else if (!isRunning) {
     if (stale || themeChanged)
       nextStep = "当前显示旧版，点击「开始排版」生成新版。";
-    else if (result?.validation.ready)
+    else if (hasDraft) nextStep = "成稿已保留，先查看差异。";
+    else if (result && isResultUsable(result))
       nextStep = "先看预览，满意后点击「复制到公众号」。";
     else nextStep = "确认主题后，点击「开始排版」。";
   }
@@ -2109,7 +2433,24 @@ export default function App() {
               </button>
             </div>
           )}
-          {display && !display.validation.ready && (
+          {hasDraft ? (
+            <div className="message warning action-banner" role="status">
+              <div className="action-banner-row">
+                <span className="action-banner-text">
+                  <strong>排版已生成，{draftIssues?.length} 处细节待核对</strong>
+                  <span>核对无误即可直接复制</span>
+                </span>
+                <span className="message-actions">
+                  <button
+                    className="primary small"
+                    onClick={() => setDrawer("inspect")}
+                  >
+                    查看差异 <ArrowRight size={13} />
+                  </button>
+                </span>
+              </div>
+            </div>
+          ) : display && !isDisplayUsable && (
             <div className="message error" role="alert">
               <span>
                 这版排版没通过原文核对，不能复制：
@@ -2560,17 +2901,25 @@ export default function App() {
                   onClick={() => setDrawer("themes")}
                 >
                   <span
-                    className={mode === "auto" ? "theme-dot-auto" : ""}
-                    style={
+                    className={
                       mode === "auto"
-                        ? undefined
-                        : { background: selectedTheme?.color || "#059669" }
+                        ? "theme-dot-auto"
+                        : mode === "blindbox"
+                          ? "theme-dot-blindbox"
+                          : ""
+                    }
+                    style={
+                      mode === "format_only"
+                        ? { background: selectedTheme?.color || "#059669" }
+                        : undefined
                     }
                   />
                   <b>
                     {mode === "auto"
                       ? "AI 自动选"
-                      : selectedTheme?.name || "摸鱼绿"}
+                      : mode === "blindbox"
+                        ? `盲盒 · ${blindBoxStyleLabel(blindBoxStyle)}`
+                        : selectedTheme?.name || "摸鱼绿"}
                   </b>
                   <ChevronDown
                     size={13}
@@ -2578,25 +2927,68 @@ export default function App() {
                     aria-hidden="true"
                   />
                 </button>
+                {display?.blindBoxBrief && !display.demo && (
+                  <span
+                    className="blindbox-result-chip"
+                    title={display.blindBoxBrief.summary}
+                  >
+                    <i
+                      style={{
+                        background: display.blindBoxBrief.palette.primary,
+                      }}
+                    />
+                    {display.blindBoxBrief.family.name} ·{" "}
+                    {display.blindBoxBrief.palette.name}
+                  </span>
+                )}
+                {mode === "blindbox" &&
+                  display?.blindBoxBrief &&
+                  !display.demo &&
+                  !isRunning &&
+                  !stale &&
+                  !!doc && (
+                    <button
+                      type="button"
+                      className="blindbox-reroll-btn"
+                      disabled={busy || !!GENERATION_CONFIG_ERROR}
+                      title="换一套不同的视觉家族与配色重新排版"
+                      onClick={() =>
+                        void startLayout(false, undefined, {
+                          skipRepeatConfirm: true,
+                        })
+                      }
+                    >
+                      <Shuffle size={12} /> 再开一盒
+                    </button>
+                  )}
                 {(mode === "auto" || themeChanged) &&
-                  displayTheme &&
+                  (displayTheme || display?.blindBoxBrief || (display && isBlindBoxThemeId(display.themeId))) &&
                   display &&
                   !display.demo && (
-                    <em title={`当前成稿主题：${displayTheme.name}`}>
-                      成稿：{displayTheme.name}
+                    <em
+                      title={`当前成稿主题：${
+                        displayTheme?.name ||
+                        formatBlindBoxLabel(display.blindBoxBrief, display.themeId)
+                      }`}
+                    >
+                      成稿：
+                      {displayTheme?.name ||
+                        formatBlindBoxLabel(display.blindBoxBrief, display.themeId)}
                     </em>
                   )}
                 {display?.demo && <em>Skill 示例</em>}
                 {sampleTheme && <em>主题样张</em>}
-                {display && display.decisions.length > 0 && (
-                  <button
-                    className="decision-chip"
-                    onClick={() => setDrawer("inspect")}
-                    title={display.decisions.join("；")}
-                  >
-                    AI 推荐
-                  </button>
-                )}
+                {display &&
+                  display.decisions.length > 0 &&
+                  !display.blindBoxBrief && (
+                    <button
+                      className="decision-chip"
+                      onClick={() => setDrawer("inspect")}
+                      title={display.decisions.join("；")}
+                    >
+                      AI 推荐
+                    </button>
+                  )}
               </span>
               <div className="width-switch">
                 <ViewportSegmentedSwitch width={width} onChange={setWidth} />
@@ -2612,9 +3004,13 @@ export default function App() {
                   <Maximize2 size={15} />
                 </button>
                 <button
+                  ref={historyButtonRef}
                   aria-label="历史版本"
                   title="历史排版版本"
-                  onClick={() => setDrawer("history")}
+                  onClick={() => {
+                    setHistoryTarget(currentFailure?.id ?? null);
+                    setDrawer("history");
+                  }}
                   disabled={!doc}
                 >
                   <History size={16} />
@@ -2669,7 +3065,9 @@ export default function App() {
                   <p>
                     {mode === "auto"
                       ? "当前为 AI 自动选主题，点击下方“开始排版”。"
-                      : "选择一套主题，点击下方“开始排版”。"}
+                      : mode === "blindbox"
+                        ? `当前为盲盒排版（${blindBoxStyleLabel(blindBoxStyle)}），点击下方“开始排版”随机抽一套视觉家族。`
+                        : "选择一套主题，点击下方“开始排版”。"}
                     <br />
                     预览、复制和下载会使用同一份成稿。
                   </p>
@@ -2685,7 +3083,9 @@ export default function App() {
                         正在按「
                         {mode === "auto"
                           ? "AI 自动选主题"
-                          : selectedTheme?.name || theme}
+                          : mode === "blindbox"
+                            ? `盲盒 · ${blindBoxStyleLabel(blindBoxStyle)}`
+                            : selectedTheme?.name || theme}
                         」排版
                       </span>
                     </div>
@@ -2753,7 +3153,13 @@ export default function App() {
                             : review?.notices.review.length
                               ? `原文已逐段核对 · ${review.notices.review.length} 条建议看一眼`
                               : "原文已逐段核对 · 可以复制了"
-                          : "这版没通过原文核对，不能复制"
+                          : reviewAccepted
+                            ? review?.notices.action.length
+                              ? `人工已核对 · ${review.notices.action.length} 处需要你处理`
+                              : `人工已核对（${draftIssues!.length} 处差异已确认）· 可以复制了`
+                            : hasDraft
+                              ? `待核对稿 · ${draftIssues!.length} 处细节待核对`
+                              : "这版没通过原文核对，不能复制"
                         : "原文保留 · 金句增强 · 一键复制"}
               </span>
               {display && !display.demo && (
@@ -2761,7 +3167,7 @@ export default function App() {
                   className="text-button preview-inspect-btn"
                   onClick={() => setDrawer("inspect")}
                 >
-                  核对详情
+                  {hasDraft ? "查看差异" : "核对详情"}
                 </button>
               )}
             </div>
@@ -2779,29 +3185,13 @@ export default function App() {
             </button>
           </div>
           <div className="output-actions">
-            <button
-              className="quiet"
-              disabled={!display}
-              onClick={() => {
-                if (!display) return;
-                try {
-                  void navigator.clipboard
-                    .writeText(display.title)
-                    .then(() => pushToast("标题已复制"))
-                    .catch(showError);
-                } catch (e) {
-                  showError(e);
-                }
-              }}
-            >
-              复制标题
-            </button>
             <div className="download-dropdown" ref={downloadMenuRef}>
               <button
                 className="icon-button download-trigger"
                 title="下载或导出"
                 aria-label="下载与导出"
                 aria-expanded={downloadMenuOpen}
+                aria-busy={exportingFormat !== null}
                 disabled={!display && !doc}
                 onClick={() => setDownloadMenuOpen((open) => !open)}
               >
@@ -2816,28 +3206,44 @@ export default function App() {
                 >
                   <button
                     role="menuitem"
-                    disabled={!display}
+                    disabled={!display || !canDownloadLayout(display)}
                     onClick={() => {
                       if (!display) return;
-                      exportResult(display, "preview");
-                      setDownloadMenuOpen(false);
-                      pushToast("已下载独立预览页 (.html)");
+                      try {
+                        exportResult(display, "preview");
+                        setDownloadMenuOpen(false);
+                        pushToast(
+                          hasDraft
+                            ? "已下载待核对稿 (.html)"
+                            : "已下载完整版 HTML",
+                        );
+                      } catch (e) {
+                        showError(e);
+                      }
                     }}
                   >
-                    下载独立预览页 (.html)
-                    <small>含一键复制栏，适合单独核对</small>
+                    下载完整版 HTML (.html)
+                    <small>
+                      {hasDraft
+                        ? "待核对稿 · 下载后仍可继续核对"
+                        : "含预览和一键复制"}
+                    </small>
                   </button>
                   <button
                     role="menuitem"
-                    disabled={!display}
-                    onClick={() => {
-                      if (!display) return;
-                      exportResult(display, "fragment");
-                      setDownloadMenuOpen(false);
-                      pushToast("已下载正文 HTML 片段");
-                    }}
+                    disabled={!!exportingFormat || !display || !canDownloadLayout(display)}
+                    onClick={() => display && void downloadVisual(display, "pdf")}
                   >
-                    下载正文 HTML 片段 (.html)
+                    {exportingFormat === "pdf" ? "正在生成 PDF…" : "下载 PDF (.pdf)"}
+                    <small>A4 分页，文字不可选中</small>
+                  </button>
+                  <button
+                    role="menuitem"
+                    disabled={!!exportingFormat || !display || !canDownloadLayout(display)}
+                    onClick={() => display && void downloadVisual(display, "png")}
+                  >
+                    {exportingFormat === "png" ? "正在生成长图…" : "下载图片 (.png)"}
+                    <small>整篇成稿导出为一张长图</small>
                   </button>
                   <button
                     role="menuitem"
@@ -2854,15 +3260,6 @@ export default function App() {
                 </div>
               )}
             </div>
-            <button
-              className="secondary"
-              disabled={!display?.validation.ready}
-              onClick={() => {
-                if (display) void handleCopyResult(display);
-              }}
-            >
-              <Copy size={16} /> 复制到公众号
-            </button>
             {isRunning && job && (
               <button
                 className="quiet danger"
@@ -2871,11 +3268,16 @@ export default function App() {
                 取消
               </button>
             )}
-            <button
-              className="primary generate-button"
-              aria-describedby="workbench-next-step"
-              disabled={!canGenerate || !!GENERATION_CONFIG_ERROR}
-              title={
+            {(() => {
+              const primaryAction: "generate" | "review" | "copy" =
+                isRunning || !display || display.demo || stale || themeChanged
+                  ? "generate"
+                  : hasDraft
+                    ? "review"
+                    : isDisplayUsable
+                      ? "copy"
+                      : "generate";
+              const generateTitle =
                 GENERATION_CONFIG_ERROR ||
                 (!doc
                   ? "先新建或导入文章"
@@ -2883,95 +3285,115 @@ export default function App() {
                     ? "先输入文章正文"
                     : overLimit
                       ? `正文需在 ${maxCharacters} 字符以内`
-                      : "生成新排版版本，可能消耗模型额度")
+                      : "生成新排版版本，可能消耗模型额度");
+              const renderGenerateBtn = (
+                variant: "primary" | "secondary",
+                label: string,
+              ) => (
+                <button
+                  className={`${variant} generate-button`}
+                  aria-describedby="workbench-next-step"
+                  disabled={!canGenerate || !!GENERATION_CONFIG_ERROR}
+                  title={generateTitle}
+                  onClick={() => void startLayout()}
+                >
+                  {busy || isRunning ? (
+                    <LoaderCircle size={16} className="spin" />
+                  ) : (
+                    <Sparkles size={16} />
+                  )}{" "}
+                  {isRunning ? `排版中 ${elapsedSeconds}s` : label}
+                </button>
+              );
+              const renderReviewOrCopyBtn = (
+                variant: "primary" | "secondary",
+              ) => (
+                <button
+                  className={variant}
+                  disabled={!isDisplayUsable && !hasDraft}
+                  onClick={() => {
+                    if (hasDraft) setDrawer("inspect");
+                    else if (display) void handleCopyResult(display);
+                  }}
+                >
+                  {hasDraft ? <FileText size={16} /> : <Copy size={16} />}
+                  {hasDraft ? "查看差异" : "复制到公众号"}
+                </button>
+              );
+              if (primaryAction === "generate") {
+                return (
+                  <>
+                    {renderReviewOrCopyBtn("secondary")}
+                    {renderGenerateBtn("primary", "开始排版")}
+                  </>
+                );
               }
-              onClick={() => void startLayout()}
-            >
-              {busy || isRunning ? (
-                <LoaderCircle size={16} className="spin" />
-              ) : (
-                <Sparkles size={16} />
-              )}{" "}
-              {isRunning ? `排版中 ${elapsedSeconds}s` : "开始排版"}
-            </button>
+              return (
+                <>
+                  {renderGenerateBtn("secondary", "重新排版")}
+                  {renderReviewOrCopyBtn("primary")}
+                </>
+              );
+            })()}
           </div>
         </div>
-        <footer className="workspace-footer">
-          <span id="workbench-next-step">{nextStep}</span>
+        <footer className={`workspace-footer${doc && walletRecovery ? " wallet-recovery-footer" : ""}`}>
+          <span id="workbench-next-step">
+            {doc && walletRecovery ? (
+              <span className="wallet-recovery-hint" role="status">
+                {walletRecovery === "top_up_balance" ? (
+                  <>
+                    TokenDance 钱包余额不足
+                    <a href={TOKEN_DANCE_CREDITS_URL} target="_blank" rel="noreferrer">
+                      去充值 <ArrowUpRight size={12} aria-hidden="true" />
+                    </a>
+                  </>
+                ) : (
+                  <>
+                    {walletRecovery === "reauthorize_api_key"
+                      ? "钱包授权已失效"
+                      : "钱包周期额度已用完"}
+                    <button className="text-button" onClick={() => setDrawer("wallet")}>
+                      {walletRecovery === "reauthorize_api_key" ? "重新授权" : "查看钱包"}
+                    </button>
+                  </>
+                )}
+              </span>
+            ) : nextStep}
+          </span>
           {filingLinks}
         </footer>
       </main>
       <div className="toast-stack" aria-live="polite">
-        {jobFailedAlert && job && (
-          <div className="floating-alert job-alert" role="alert">
-            <div className="floating-alert-head">
-              <span className="floating-alert-title">
-                <AlertTriangle size={15} />
-                {job.status === "outcome_unknown"
-                  ? "计费结果未知"
-                  : "排版未完成"}
-                <small>已请求 {job.callCount} 次</small>
-              </span>
-              <button
-                className="icon-button"
-                aria-label="关闭异常提示"
-                onClick={() => setDismissedJobId(job.id)}
-              >
-                <X size={15} />
-              </button>
-            </div>
-            <p className="floating-alert-body">
-              {job.error?.message
-                ? friendlyJobMessage(job.error.message, jobBlocks)
-                : "请求中断，未自动重发。"}
-              {job.error?.recoveryAction === "top_up_balance" &&
-                " 当前 Key 仍有效，请前往平台充值。"}
-              {job.error?.recoveryAction === "api_key_quota" &&
-                " 已达周期额度上限，请等待刷新或更换授权。"}
-            </p>
-            <div className="floating-alert-actions">
-              <button
-                className="text-button"
-                onClick={() => void downloadLayoutFailure(job).catch(showError)}
-              >
-                <ArrowDownToLine size={14} /> 下载错误信息
-              </button>
-              {job.error?.recoveryAction && (
-                <button
-                  className="text-button"
-                  onClick={() => setDrawer("wallet")}
-                >
-                  打开钱包处理
-                </button>
-              )}
-              {job.diagnostic && (
-                <details className="floating-diagnostic">
-                  <summary>失败详情与用量</summary>
-                  <p>
-                    结束原因：{job.diagnostic.finishReason || "未返回"} · 正文{" "}
-                    {job.diagnostic.contentCharacters} 字符 · 思考{" "}
-                    {job.diagnostic.reasoningCharacters} 字符
-                  </p>
-                  <p>
-                    输入 {formatTokens(job.diagnostic.inputTokens)} · 输出{" "}
-                    {formatTokens(job.diagnostic.outputTokens)} tokens
-                  </p>
-                  {job.hasFailureResponses && (
-                    <button
-                      className="text-button"
-                      onClick={() =>
-                        void downloadLayoutFailure(job, true).catch(showError)
-                      }
-                    >
-                      下载含模型正文的报告
-                    </button>
-                  )}
-                </details>
-              )}
-            </div>
+        {currentFailure && !drawer && !confirmModal && (
+          <div className="floating-alert job-alert" role="status">
+            <span className="floating-alert-title">
+              <AlertTriangle size={16} aria-hidden="true" />
+              {currentFailure.status === "outcome_unknown"
+                ? "本次排版结果未知，可能已计费。"
+                : "本次排版未完成，详情已保存到历史记录。"}
+            </span>
+            <button
+              className="text-button"
+              onClick={() => {
+                setHistoryTarget(currentFailure.id);
+                setFailureNotice(null);
+                setFullscreenPreview(false);
+                setDrawer("history");
+              }}
+            >
+              查看记录
+            </button>
+            <button
+              className="icon-button"
+              aria-label="关闭异常提示"
+              onClick={() => setFailureNotice(null)}
+            >
+              <X size={15} />
+            </button>
           </div>
         )}
-        {error && error !== job?.error?.message && (
+        {error && (
           <div className="floating-alert error-alert" role="alert">
             <span>{friendlyJobMessage(error, jobBlocks)}</span>
             <button
@@ -2996,23 +3418,37 @@ export default function App() {
           </div>
         )}
         {toasts.map((item) => (
-          <div key={item.id} className="toast" role="status">
-            <Check size={15} />
+          <div
+            key={item.id}
+            className={"toast " + (item.action ? "toast-with-action" : "")}
+            role="status"
+            onClick={
+              item.action ? undefined : () => dismissToast(item.id)
+            }
+          >
+            <span className="toast-icon" aria-hidden="true">
+              <Check size={12} />
+            </span>
             <span>{item.text}</span>
             {item.action && (
-              <button
-                className="toast-action"
-                onClick={() => {
-                  dismissToast(item.id);
-                  item.action!.run();
-                }}
-              >
-                <Undo2 size={13} /> {item.action.label}
-              </button>
+              <>
+                <button
+                  className="toast-action"
+                  onClick={() => {
+                    dismissToast(item.id);
+                    item.action!.run();
+                  }}
+                >
+                  <Undo2 size={13} /> {item.action.label}
+                </button>
+                <button
+                  aria-label="关闭通知"
+                  onClick={() => dismissToast(item.id)}
+                >
+                  <X size={14} />
+                </button>
+              </>
             )}
-            <button aria-label="关闭通知" onClick={() => dismissToast(item.id)}>
-              <X size={14} />
-            </button>
           </div>
         ))}
       </div>
@@ -3022,6 +3458,15 @@ export default function App() {
         accept=".json"
         hidden
         onChange={(e) => e.target.files?.[0] && void restore(e.target.files[0])}
+      />
+      <input
+        ref={reportRef}
+        type="file"
+        accept=".json"
+        hidden
+        onChange={(e) =>
+          e.target.files?.[0] && void recoverFromReport(e.target.files[0])
+        }
       />
       <input
         ref={fileRef}
@@ -3067,19 +3512,24 @@ export default function App() {
             }
           >
             <div className="drawer-header">
-              <h2>
-                {
+              <div>
+                <h2>
                   {
-                    themes: "为文章选个好模样",
-                    history: "每一次排版，都在这里",
-                    wallet: wallet?.connected ? "我的钱包" : "连接钱包",
-                    help: "从好内容，到好模样",
-                    settings: "排版设置",
-                    confirm: "开始排版",
-                    inspect: "成稿核对与用量",
-                  }[drawer]
-                }
-              </h2>
+                    {
+                      themes: "为文章选个好模样",
+                      history: "每一次排版，都在这里",
+                      wallet: wallet?.connected ? "我的钱包" : "连接钱包",
+                      help: "从好内容，到好模样",
+                      settings: "排版设置",
+                      confirm: "开始排版",
+                      inspect: "成稿核对与用量",
+                    }[drawer]
+                  }
+                </h2>
+                {drawer === "help" && (
+                  <p className="help-version">当前版本 v{APP_VERSION}</p>
+                )}
+              </div>
               <button
                 className="icon-button"
                 aria-label="关闭面板"
@@ -3138,75 +3588,188 @@ export default function App() {
                 </div>
               ) : (
                 <>
-                  <p className="drawer-description">
-                    选一套喜欢的版式，预览与切换不消耗额度。
-                  </p>
-                  <button
-                    className={
-                      "auto-theme " + (mode === "auto" ? "chosen" : "")
-                    }
-                    onClick={() => {
-                      setMode("auto");
-                      setDrawer(null);
-                      pushToast("已切换为 AI 自动选主题");
-                    }}
+                  <div
+                    className="theme-mode-tabs"
+                    role="tablist"
+                    aria-label="排版模式选择"
                   >
-                    <Sparkles size={20} />
-                    <span>
-                      <b>让 AI 选主题</b>
-                      <small>根据文章内容推荐，最多增加一次分析调用</small>
-                    </span>
-                    <ArrowRight size={17} />
-                  </button>
-                  <div className="theme-grid">
-                    {themes.map((t) => (
-                      <article
-                        key={t.id}
-                        className={
-                          "theme-card " +
-                          (theme === t.id && mode !== "auto" ? "chosen" : "")
-                        }
-                      >
-                        <button
-                          className="theme-image-button"
-                          aria-label={`查看${t.name}完整样张`}
-                          onClick={() => setPreviewTheme(t)}
-                        >
-                          <img
-                            src={themeImage(t.id, true)}
-                            alt={`${t.name}真实模板预览`}
-                            loading="lazy"
-                          />
-                          <span>查看完整样张</span>
-                        </button>
-                        <div className="theme-caption">
-                          <b>{t.name}</b>
-                          {theme === t.id && mode !== "auto" ? (
-                            <span className="selected-tag">
-                              <Check size={13} /> 已选
-                            </span>
-                          ) : null}
-                        </div>
-                        <small>{t.description.split("（")[0]}</small>
-                        <div className="theme-card-bottom">
-                          <button
-                            className="text-button"
-                            aria-label={`使用${t.name}主题`}
-                            onClick={() => {
-                              setTheme(t.id);
-                              setMode("format_only");
-                              setDrawer(null);
-                              pushToast(
-                                `已选择「${t.name}」，可先看样张，点击「开始排版」生成新成稿。`,
-                              );
-                            }}
-                          >
-                            使用主题 <ArrowRight size={13} />
-                          </button>
-                        </div>
-                      </article>
-                    ))}
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={themeDrawerTab === "presets"}
+                      className={
+                        "theme-mode-tab " +
+                        (themeDrawerTab === "presets" ? "active" : "")
+                      }
+                      onClick={() => setThemeDrawerTab("presets")}
+                    >
+                      <span>精选主题</span>
+                      <em>{themes.length || 13}</em>
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={themeDrawerTab === "blindbox"}
+                      className={
+                        "theme-mode-tab blindbox-tab " +
+                        (themeDrawerTab === "blindbox" ? "active" : "")
+                      }
+                      onClick={() => setThemeDrawerTab("blindbox")}
+                    >
+                      <span className="blindbox-tab-fx" aria-hidden="true" />
+                      <span className="blindbox-dice-stage" aria-hidden="true">
+                        <Dices size={16} className="blindbox-tab-dice" />
+                        <span className="blindbox-dice-shadow" />
+                        <span className="blindbox-sparks">
+                          <i className="spark-1">✦</i>
+                          <i className="spark-2" />
+                          <i className="spark-3" />
+                        </span>
+                      </span>
+                      <span className="blindbox-tab-label">盲盒排版</span>
+                      {themeDrawerTab !== "blindbox" ? (
+                        <span className="blindbox-float-badge">试试手气</span>
+                      ) : (
+                        <em>百变</em>
+                      )}
+                    </button>
                   </div>
+
+                  {themeDrawerTab === "presets" ? (
+                    <>
+                      <p className="drawer-description">
+                        选一套喜欢的版式，预览与切换不消耗额度。
+                      </p>
+                      <button
+                        className={
+                          "auto-theme " + (mode === "auto" ? "chosen" : "")
+                        }
+                        onClick={() => {
+                          setMode("auto");
+                          setDrawer(null);
+                          pushToast("已切换 AI 自动选主题");
+                        }}
+                      >
+                        <Sparkles size={20} />
+                        <span>
+                          <b>让 AI 从以下主题挑选</b>
+                          <small>
+                            根据文章题材自动匹配最合适的一套，最多增加一次分析调用
+                          </small>
+                        </span>
+                        <ArrowRight size={17} />
+                      </button>
+                      <div className="theme-grid">
+                        {themes.map((t) => (
+                          <article
+                            key={t.id}
+                            className={
+                              "theme-card " +
+                              (theme === t.id && mode === "format_only"
+                                ? "chosen"
+                                : "")
+                            }
+                          >
+                            <button
+                              className="theme-image-button"
+                              aria-label={`查看${t.name}完整样张`}
+                              onClick={() => setPreviewTheme(t)}
+                            >
+                              <img
+                                src={themeImage(t.id, true)}
+                                alt={`${t.name}真实模板预览`}
+                                loading="lazy"
+                              />
+                              <span>查看完整样张</span>
+                            </button>
+                            <div className="theme-caption">
+                              <b>{t.name}</b>
+                              {theme === t.id && mode === "format_only" ? (
+                                <span className="selected-tag">
+                                  <Check size={13} /> 已选
+                                </span>
+                              ) : null}
+                            </div>
+                            <small>{t.description.split("（")[0]}</small>
+                            <div className="theme-card-bottom">
+                              <button
+                                className="text-button"
+                                aria-label={`使用${t.name}主题`}
+                                onClick={() => {
+                                  setTheme(t.id);
+                                  setMode("format_only");
+                                  setDrawer(null);
+                                  pushToast(`已选择「${t.name}」`);
+                                }}
+                              >
+                                使用主题 <ArrowRight size={13} />
+                              </button>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="blindbox-panel">
+                      <p className="drawer-description">
+                        跳出固定模板，每次从 160+ 组配色与版式里随机开箱，单次调用出稿且不与上盒重复。
+                      </p>
+                      <div
+                        className="blindbox-style-grid"
+                        role="radiogroup"
+                        aria-label="盲盒风格方向"
+                      >
+                        {BLIND_BOX_STYLES.map((st) => {
+                          const selected =
+                            mode === "blindbox" && blindBoxStyle === st.id;
+                          const swatches = BLIND_BOX_SWATCHES[st.id];
+                          return (
+                            <button
+                              key={st.id}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              className={
+                                "blindbox-style-card " +
+                                (selected ? "selected" : "")
+                              }
+                              onClick={() => {
+                                setBlindBoxStyle(st.id);
+                                setMode("blindbox");
+                                setDrawer(null);
+                                pushToast(`已切换盲盒 · ${st.label}`);
+                              }}
+                            >
+                              <div className="blindbox-card-top">
+                                <span
+                                  className="blindbox-swatches"
+                                  aria-hidden="true"
+                                >
+                                  {swatches.map((hex) => (
+                                    <i key={hex} style={{ background: hex }} />
+                                  ))}
+                                </span>
+                                {selected ? (
+                                  <span className="selected-tag">
+                                    <Check size={12} /> 已选
+                                  </span>
+                                ) : (
+                                  <span className="blindbox-card-go">
+                                    使用 <ArrowRight size={12} />
+                                  </span>
+                                )}
+                              </div>
+                              <b>{st.label}</b>
+                              <small>{st.description}</small>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="blindbox-panel-note">
+                        点击任一风格即刻生效；出稿后可在预览顶栏随时点击「再开一盒」换新方案。
+                      </p>
+                    </div>
+                  )}
                 </>
               ))}
             {drawer === "settings" && (
@@ -3357,13 +3920,11 @@ export default function App() {
                   <div>
                     <small>成稿主题</small>
                     <strong>
-                      {themes.find((t) => t.id === display.themeId)?.name ||
-                        display.themeId}
+                      {display.blindBoxBrief || isBlindBoxThemeId(display.themeId)
+                        ? formatBlindBoxLabel(display.blindBoxBrief, display.themeId)
+                        : themes.find((t) => t.id === display.themeId)?.name ||
+                          display.themeId}
                     </strong>
-                  </div>
-                  <div>
-                    <small>对应原稿</small>
-                    <strong>第 {display.sourceRevision} 版</strong>
                   </div>
                   <div>
                     <small>本次用量（tokens）</small>
@@ -3373,7 +3934,149 @@ export default function App() {
                     </strong>
                   </div>
                 </div>
-                {!display.validation.ready && (
+                {draftIssues?.length ? (
+                  <section className="notice-section">
+                    <div className="draft-section-head">
+                      <h4>
+                        {reviewAccepted
+                          ? `已确认的原文差异（${draftIssues.length}）`
+                          : `待核对的原文差异（${draftIssues.length}）`}
+                      </h4>
+                      {reviewAccepted && (
+                        <span className="draft-accepted-pill">已人工核对</span>
+                      )}
+                    </div>
+                    {draftIssues.map((issue) => {
+                      const diff = diffBlockText(
+                        issue.expected,
+                        issue.actual,
+                        issue.kind,
+                      );
+                      return (
+                        <div
+                          className={`notice-item draft-diff ${
+                            reviewAccepted ? "is-accepted" : "notice-action"
+                          }`}
+                          key={`${issue.sourceId}-${issue.kind}`}
+                        >
+                          <div className="draft-diff-head">
+                            <strong>{describeBlock(issue.sourceId, review.blocks)}</strong>
+                            <span className={`diff-summary-badge is-${diff.summary.tone}`}>
+                              {diff.summary.label}
+                            </span>
+                          </div>
+                          {issue.detail && (
+                            <p className="draft-diff-detail">{issue.detail}</p>
+                          )}
+                          {issue.expected && (
+                            <div className="draft-diff-row">
+                              <span className="diff-role">原文</span>
+                              <p>
+                                {diff.expectedRuns.map((run, idx) =>
+                                  run.type === "del" ? (
+                                    <del className="diff-del" key={idx}>
+                                      {run.text}
+                                    </del>
+                                  ) : (
+                                    <span key={idx}>{run.text}</span>
+                                  ),
+                                )}
+                              </p>
+                            </div>
+                          )}
+                          <div className="draft-diff-row">
+                            <span className="diff-role">成稿</span>
+                            <p>
+                              {issue.actual ? (
+                                diff.actualRuns.map((run, idx) =>
+                                  run.type === "add" ? (
+                                    <mark className="diff-add" key={idx}>
+                                      {run.text}
+                                    </mark>
+                                  ) : (
+                                    <span key={idx}>{run.text}</span>
+                                  ),
+                                )
+                              ) : (
+                                <span className="diff-missing">此处未找到对应内容</span>
+                              )}
+                            </p>
+                          </div>
+                          {hasDraft &&
+                            display.sourceHtml &&
+                            !stale &&
+                            ["changed_text", "missing", "outside_body"].includes(
+                              issue.kind,
+                            ) && (
+                              <div className="notice-actions">
+                                <button
+                                  className="secondary"
+                                  disabled={busy || isRunning || !!restoringSource}
+                                  onClick={() =>
+                                    void restoreDifference(display, issue.sourceId)
+                                  }
+                                >
+                                  {restoringSource === issue.sourceId
+                                    ? "正在恢复…"
+                                    : "恢复此处原文"}
+                                </button>
+                              </div>
+                            )}
+                        </div>
+                      );
+                    })}
+                    {hasDraft ? (
+                      <div className="notice-actions draft-review-actions">
+                        <span
+                          className="tip-wrap"
+                          data-tip={
+                            stale
+                              ? "原稿已修改，请先重新排版"
+                              : "让 AI 对齐原文重新生成（会再次消耗 Token）"
+                          }
+                        >
+                          <button
+                            className="secondary"
+                            disabled={busy || isRunning || !!restoringSource || stale || !!GENERATION_CONFIG_ERROR}
+                            onClick={() => void requestRepair(display)}
+                          >
+                            用 AI 修复
+                          </button>
+                        </span>
+                        <button
+                          className="primary"
+                          disabled={!!restoringSource}
+                          onClick={() => void handleAcceptAndCopy(display)}
+                        >
+                          保留差异并复制
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="notice-actions draft-review-actions is-accepted">
+                        {!stale && !GENERATION_CONFIG_ERROR && (
+                          <span
+                            className="tip-wrap"
+                            data-tip="让 AI 对齐原文重新生成（会再次消耗 Token）"
+                          >
+                            <button
+                              className="text-button"
+                              disabled={busy || isRunning}
+                              onClick={() => void requestRepair(display)}
+                            >
+                              仍需 AI 修复
+                            </button>
+                          </span>
+                        )}
+                        <button
+                          className="secondary"
+                          onClick={() => void handleCopyResult(display)}
+                        >
+                          复制此稿
+                        </button>
+                      </div>
+                    )}
+                  </section>
+                ) : !isDisplayUsable && (
                   <div className="inspect-card notice-block-error">
                     <h4>没通过原文核对，不能复制</h4>
                     {review.errors.map((item) => (
@@ -3501,19 +4204,29 @@ export default function App() {
             {drawer === "confirm" && (
               <div className="confirm-layout">
                 <div className="confirm-theme">
-                  <Sparkles size={20} />
+                  {mode === "blindbox" ? (
+                    <Dices size={20} />
+                  ) : (
+                    <Sparkles size={20} />
+                  )}
                   <span>
                     {mode === "auto"
                       ? "AI 自动选主题"
-                      : themes.find((t) => t.id === theme)?.name || "摸鱼绿"}
-                    <small>保留原文 · 金句与头尾卡片</small>
+                      : mode === "blindbox"
+                        ? `盲盒排版（${blindBoxStyleLabel(blindBoxStyle)}）`
+                        : themes.find((t) => t.id === theme)?.name || "摸鱼绿"}
+                    <small>
+                      {mode === "blindbox"
+                        ? "160+ 组配色与版式随机开箱 · 单次调用出稿"
+                        : "保留原文 · 金句与头尾卡片"}
+                    </small>
                   </span>
                 </div>
                 <p>文章将交给 TokenDance 和模型处理，费用从你的钱包扣除。</p>
                 <details className="disclosure">
                   <summary>查看调用说明</summary>
                   <p>
-                    手选最多2次调用，自动选主题最多3次；包含一次必要修复。失败、取消或中断也可能计费，不自动重试。
+                    手选主题调用一次，AI 自动选主题最多调用两次。AI 修复由你另行发起。失败、取消或中断也可能计费。
                   </p>
                 </details>
                 <button
@@ -3607,11 +4320,11 @@ export default function App() {
                       刷新余额
                     </button>
                     <a
-                      href="https://tokendance.space"
+                      href={TOKEN_DANCE_CREDITS_URL}
                       target="_blank"
                       rel="noreferrer"
                     >
-                      前往平台
+                      TokenDance 余额与充值
                     </a>
                     <button
                       className="text-button danger"
@@ -3645,88 +4358,289 @@ export default function App() {
             )}
             {drawer === "history" && (
               <div className="versions">
-                {versions.length === 0 ? (
+                <div className="history-toolbar">
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={recoveringJobId !== null || busy || !doc}
+                    onClick={() => reportRef.current?.click()}
+                  >
+                    <Upload size={14} />{" "}
+                    {recoveringJobId === "report"
+                      ? "正在恢复…"
+                      : "从失败报告 JSON 恢复"}
+                  </button>
+                </div>
+                {versions.length === 0 && failedJobs.length === 0 ? (
                   <p className="drawer-description">
                     还没有排版版本。完成一次排版后，结果会保存在这里。
                   </p>
                 ) : (
-                  versions.map((v, i) => {
-                    const isCurrent = result?.resultId === v.id;
-                    return (
-                      <div
-                        key={v.id}
-                        className={isCurrent ? "current-version" : ""}
-                      >
-                        <button
-                          onClick={async () => {
-                            try {
-                              const r = await local.getResult(v.id);
-                              setResult(r);
-                              setDrawer(null);
-                            } catch (e) {
-                              showError(e);
+                  [
+                    ...versions.map((v, i) => ({
+                      kind: "version" as const,
+                      time: v.createdAt,
+                      v,
+                      num: versions.length - i,
+                    })),
+                    ...failedJobs.map((j) => ({
+                      kind: "failed" as const,
+                      time: j.startedAt,
+                      j,
+                    })),
+                  ]
+                    .sort((a, b) => b.time - a.time)
+                    .map((entry) => {
+                      if (entry.kind === "version") {
+                        const { v, num } = entry;
+                        const isCurrent = result?.resultId === v.id;
+                        return (
+                          <div
+                            key={v.id}
+                            className={
+                              "version-item " +
+                              (isCurrent ? "current-version" : "")
                             }
-                          }}
+                          >
+                            <button
+                              type="button"
+                              className="version-main"
+                              onClick={async () => {
+                                try {
+                                  const r = await local.getResult(v.id);
+                                  setResult(r);
+                                  setDrawer(null);
+                                } catch (e) {
+                                  showError(e);
+                                }
+                              }}
+                            >
+                              <span className="version-info">
+                                <b>
+                                  排版版本 {num}
+                                  {v.needsReview && (
+                                    <em className="version-badge">待核对</em>
+                                  )}
+                                  {isCurrent && (
+                                    <em className="version-badge">当前预览</em>
+                                  )}
+                                </b>
+                                <small>
+                                  {new Date(v.createdAt * 1000).toLocaleString(
+                                    "zh-CN",
+                                  )}
+                                </small>
+                              </span>
+                              <span className="version-theme-link">
+                                {v.themeLabel ||
+                                  themes.find((t) => t.id === v.themeId)
+                                    ?.name ||
+                                  (isBlindBoxThemeId(v.themeId)
+                                    ? formatBlindBoxLabel(undefined, v.themeId)
+                                    : v.themeId)}
+                                <ArrowRight size={14} />
+                              </span>
+                            </button>
+                            <div className="version-actions">
+                              <button
+                                type="button"
+                                className="icon-button version-icon-btn"
+                                aria-label={
+                                  v.needsReview
+                                    ? "下载待核对稿 HTML"
+                                    : "下载完整版 HTML"
+                                }
+                                data-tip={
+                                  v.needsReview
+                                    ? "下载待核对稿 HTML"
+                                    : "下载完整版 HTML (.html)"
+                                }
+                                onClick={() =>
+                                  void local
+                                    .getResult(v.id)
+                                    .then((value) =>
+                                      exportResult(value, "preview"),
+                                    )
+                                    .catch(showError)
+                                }
+                              >
+                                <ArrowDownToLine size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                className="icon-button version-icon-btn danger delete-version"
+                                aria-label="删除这个版本"
+                                title="删除这个历史版本"
+                                data-tip="删除这个版本"
+                                onClick={async () => {
+                                  if (
+                                    !(await askConfirm({
+                                      title: "删除历史版本",
+                                      message:
+                                        "确认删除这个历史排版版本？原稿与其余版本会保留。",
+                                      confirmText: "确认删除",
+                                      cancelText: "取消",
+                                      danger: true,
+                                    }))
+                                  )
+                                    return;
+                                  try {
+                                    await local.deleteResult(v.id);
+                                    setVersions((old) =>
+                                      old.filter((row) => row.id !== v.id),
+                                    );
+                                    if (result?.resultId === v.id)
+                                      setResult(null);
+                                    pushToast("已删除该历史版本");
+                                  } catch (e) {
+                                    showError(e);
+                                  }
+                                }}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
+                      const j = entry.j;
+                      const canRecover = recoverableJobIds.has(j.id);
+                      const themeName = j.layout?.themeId
+                        ? themes.find((t) => t.id === j.layout!.themeId)
+                            ?.name ||
+                          (isBlindBoxThemeId(j.layout.themeId)
+                            ? formatBlindBoxLabel(undefined, j.layout.themeId)
+                            : j.layout.themeId)
+                        : "";
+                      const label =
+                        j.stage === "validate"
+                          ? "校验未通过"
+                          : j.status === "outcome_unknown"
+                            ? "结果未知"
+                            : "排版未完成";
+                      return (
+                        <div
+                          key={j.id}
+                          className="version-item failed-version"
+                          ref={j.id === visibleHistoryTarget ? historyRowRef : undefined}
+                          tabIndex={j.id === visibleHistoryTarget ? -1 : undefined}
                         >
-                          <span>
-                            <b>
-                              排版版本 {versions.length - i}
-                              {isCurrent && (
-                                <em className="version-badge">当前预览</em>
-                              )}
-                            </b>
-                            <small>
-                              {new Date(v.createdAt * 1000).toLocaleString(
-                                "zh-CN",
-                              )}{" "}
-                              · 原稿 v{v.sourceRevision}
-                            </small>
-                          </span>
-                          <span>
-                            {themes.find((t) => t.id === v.themeId)?.name ||
-                              v.themeId}
-                            <ArrowRight size={15} />
-                          </span>
-                        </button>
-                        <button
-                          className="text-button"
-                          onClick={async () =>
-                            exportResult(await local.getResult(v.id), "preview")
-                          }
-                        >
-                          下载独立预览页
-                        </button>
-                        <button
-                          className="text-button danger delete-version"
-                          onClick={async () => {
-                            if (
-                              !(await askConfirm({
-                                title: "删除历史版本",
-                                message:
-                                  "确认删除这个历史排版版本？原稿与其余版本会保留。",
-                                confirmText: "确认删除",
-                                cancelText: "取消",
-                                danger: true,
-                              }))
-                            )
-                              return;
-                            try {
-                              await local.deleteResult(v.id);
-                              setVersions((old) =>
-                                old.filter((row) => row.id !== v.id),
-                              );
-                              if (result?.resultId === v.id) setResult(null);
-                              pushToast("历史排版版本已删除");
-                            } catch (e) {
-                              showError(e);
-                            }
-                          }}
-                        >
-                          删除这个版本
-                        </button>
-                      </div>
-                    );
-                  })
+                          <div className="failed-version-top">
+                            <span className="version-info">
+                              <b>
+                                {label}
+                                <em className="version-badge failed-badge">
+                                  已请求 {j.callCount} 次
+                                </em>
+                              </b>
+                              <small className="failed-version-meta">
+                                {new Date(j.startedAt * 1000).toLocaleString(
+                                  "zh-CN",
+                                )}
+                                {j.diagnostic
+                                  ? ` · 正文 ${j.diagnostic.contentCharacters} 字 · 输出 ${formatTokens(j.diagnostic.outputTokens)} tokens`
+                                  : ""}
+                              </small>
+                            </span>
+                            {themeName && (
+                              <span className="version-theme-link">
+                                {themeName}
+                              </span>
+                            )}
+                          </div>
+                          {j.error?.message && (
+                            <p className="failed-version-reason">
+                              {friendlyJobMessage(j.error.message, jobBlocks)}
+                            </p>
+                          )}
+                          {j.diagnostic && (
+                            <details className="floating-diagnostic">
+                              <summary>失败详情与用量</summary>
+                              <p>
+                                结束原因：{j.diagnostic.finishReason || "未返回"} · 正文{" "}
+                                {j.diagnostic.contentCharacters} 字符 · 思考{" "}
+                                {j.diagnostic.reasoningCharacters} 字符
+                              </p>
+                              <p>
+                                输入 {formatTokens(j.diagnostic.inputTokens)} · 输出{" "}
+                                {formatTokens(j.diagnostic.outputTokens)} tokens
+                              </p>
+                            </details>
+                          )}
+                          <div className="failed-version-actions">
+                            {canRecover && (
+                              <button
+                                type="button"
+                                className="primary small"
+                                disabled={recoveringJobId !== null || busy}
+                                onClick={() => void recoverFailure(j)}
+                              >
+                                <RotateCcw size={13} />{" "}
+                                {recoveringJobId === j.id
+                                  ? "正在恢复…"
+                                  : "重新核对并恢复"}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() =>
+                                void downloadLayoutFailure(j, false).catch(
+                                  showError,
+                                )
+                              }
+                            >
+                              <ArrowDownToLine size={13} /> 下载错误
+                            </button>
+                            {canRecover && (
+                              <button
+                                type="button"
+                                className="text-button"
+                                onClick={() =>
+                                  void downloadLayoutFailure(j, true).catch(
+                                    showError,
+                                  )
+                                }
+                              >
+                                <ArrowDownToLine size={13} /> 含正文报告
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="icon-button version-icon-btn danger delete-version"
+                              aria-label="删除这条失败记录"
+                              title="删除这条失败记录"
+                              data-tip="删除记录"
+                              onClick={async () => {
+                                if (
+                                  !(await askConfirm({
+                                    title: "删除失败记录",
+                                    message:
+                                      "确认删除这条排版失败记录及留存的模型响应？",
+                                    confirmText: "确认删除",
+                                    cancelText: "取消",
+                                    danger: true,
+                                  }))
+                                )
+                                  return;
+                                try {
+                                  await local.deleteJob(j.id);
+                                  if (job?.id === j.id && doc) {
+                                    setJob(await local.latestJob(doc.id));
+                                  }
+                                  await refreshHistory();
+                                  pushToast("已删除该失败记录");
+                                } catch (e) {
+                                  showError(e);
+                                }
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
                 )}
               </div>
             )}
@@ -3770,7 +4684,7 @@ export default function App() {
                 </div>
                 <h3>页面关闭与费用</h3>
                 <p>
-                  任务仅在发起页面运行。关闭/刷新不会在后台继续；中断的请求可能已计费，不自动重发。手选最多生成和修复各一次，自动主题最多再加一次分析。真实调用只用你授权的个人Key。
+                  关闭或刷新页面会中断任务，已发出的请求可能计费。手选主题调用一次，AI 自动选主题另需一次分析。AI 修复由你另行发起。
                 </p>
                 <h3>图片如何处理？</h3>
                 <p>
@@ -3804,6 +4718,8 @@ export default function App() {
                     setResult(null);
                     setJob(null);
                     setVersions([]);
+                    setFailedJobs([]);
+                    setRecoverableJobIds(new Set());
                     setAssets([]);
                     await refreshArticles();
                     await refreshWallet();
@@ -3880,10 +4796,16 @@ export default function App() {
               {display && (
                 <button
                   className="primary"
-                  disabled={!display.validation.ready}
-                  onClick={() => void handleCopyResult(display)}
+                  disabled={!isDisplayUsable && !hasDraft}
+                  onClick={() => {
+                    if (hasDraft) {
+                      setFullscreenPreview(false);
+                      setDrawer("inspect");
+                    } else void handleCopyResult(display);
+                  }}
                 >
-                  <Copy size={15} /> 复制到公众号
+                  {hasDraft ? <FileText size={15} /> : <Copy size={15} />}
+                  {hasDraft ? "查看差异" : "复制到公众号"}
                 </button>
               )}
               <button

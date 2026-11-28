@@ -82,7 +82,11 @@ for (const entry of registry.filter((e) => e.enabled)) {
     if (raw === null) {
       throw new Error(`Missing theme specimen for ${themeId}`);
     }
-    const safe = purify.sanitize(raw, {
+    const cleaned = raw.replace(
+      /<p[^>]*style="[^"]*display\s*:\s*none[^"]*"[^>]*>\s*<mp-style-type\b[^>]*>\s*<\/mp-style-type>\s*<\/p>/gi,
+      "",
+    );
+    const safe = purify.sanitize(cleaned, {
       FORBID_TAGS: ["script", "iframe", "object", "embed", "link", "img"],
       FORBID_ATTR: ["onload", "onclick"],
     });

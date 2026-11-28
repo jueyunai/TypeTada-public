@@ -4,11 +4,40 @@ import {
   checkResult,
   inert,
   layoutRepairHints,
+  restoreOriginalBlock,
   sanitize,
   sourceManifest,
 } from "../src/content";
 
 describe("skill-agnostic source verification and unified gates", () => {
+  it("matches a numbered heading split across one card, preserving its decoration and requiring the original number", () => {
+    const { blocks, images } = sourceManifest("## 01 开口之前\n\n正文。");
+    const card = (number: string, heading = "开口之前") => `
+      <section style="display:flex">
+        <section><p>${number}</p><p>PART</p></section>
+        <span style="width:1px;height:36px"><span leaf=""><br></span></span>
+        <section><p style="font-weight:900">${heading}</p><p>PURPOSE · 装饰短标</p></section>
+      </section>`;
+    const verify = (html: string) => checkGeneratedResult(
+      `<section>${html}<p>正文。</p></section>`, blocks, images,
+    );
+    const ok = verify(card("01"));
+    expect(ok.validation.ready).toBe(true);
+    expect(ok.enhancements.map((item) => item.text).join("\n")).toContain("PART");
+    expect(ok.enhancements.map((item) => item.text).join("\n")).not.toContain("01");
+    for (const html of [
+      card(""), card("02"), card("01", "开口之后"),
+      "<section><p>01</p></section><section><h3>开口之前</h3></section>",
+    ]) {
+      const draft = verify(html);
+      expect(draft.validation.ready).toBe(false);
+      expect(draft.reviewIssues?.[0]).toMatchObject({ sourceId: "s001", kind: "changed_text" });
+    }
+    const unsafe = verify(card("02") + "<script>void 0</script>");
+    expect(unsafe.validation.ready).toBe(false);
+    expect(unsafe.reviewIssues).toBeUndefined();
+  });
+
   it("accepts a brand-new Skill layout with zero data-* attributes and records all added segments in order", () => {
     const md = [
       "## 第一章",
@@ -328,6 +357,40 @@ describe("skill-agnostic source verification and unified gates", () => {
       checkResult(goodList, listSource.blocks, listSource.images).validation
         .ready,
     ).toBe(true);
+  });
+
+  it("keeps all three list items recognizable when a theme adds visible numbering", () => {
+    const { blocks, images } = sourceManifest("- 核对原文\n- 下载成稿\n- 公众号发布");
+    const items = ["核对原文", "下载成稿", "公众号发布"];
+    const check = (list: string[]) =>
+      checkGeneratedResult(
+        `<section><ul>${list.map((item, i) => `<li><span>0${i + 1}、</span><p>${item}</p></li>`).join("")}</ul></section>`,
+        blocks,
+        images,
+      );
+    expect(check(items).validation.ready).toBe(true);
+    expect(check(items.slice(1)).reviewIssues?.[0].sourceId).toBe("s001");
+    expect(check([...items].reverse()).validation.ready).toBe(false);
+  });
+
+  it("restores a missing editorial note without replacing the next intact paragraph", () => {
+    const { blocks, images } = sourceManifest(
+      "开头。\n\n给编辑的备注：这段可整段删除。\n\n给编辑的备注：这段保留。\n\n下期继续验证。",
+    );
+    const html = "<section><p>开头。</p><p>给编辑的备注：这段保留。</p>" +
+      '<p data-source="s004" style="color:#236442">下期继续观察。</p></section>';
+    const initial = checkResult(html, blocks, images);
+    expect(initial.reviewIssues?.map(({ sourceId, kind }) => ({ sourceId, kind }))).toEqual([
+      { sourceId: "s002", kind: "missing" },
+      { sourceId: "s004", kind: "changed_text" },
+    ]);
+    const partial = restoreOriginalBlock(html, blocks, images, "s002");
+    expect(partial?.reviewIssues).toEqual(initial.reviewIssues?.slice(1));
+    expect(partial?.plainText).toContain("这段可整段删除。\n给编辑的备注：这段保留。");
+    const restored = restoreOriginalBlock(partial!.sourceHtml, blocks, images, "s004");
+    expect(restored?.validation.ready).toBe(true);
+    expect(restored?.plainText).toContain("下期继续验证。");
+    expect(restored?.htmlFragment).toContain("color:#236442");
   });
 
   it("preserves each image's click target in both pure-image and mixed paragraphs", () => {

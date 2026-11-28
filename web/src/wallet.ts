@@ -32,7 +32,11 @@ export class PlatformError extends Error {
     super(message);
   }
 }
-export async function readPlatform(url: string, init: RequestInit) {
+export async function readPlatform(
+  url: string,
+  init: RequestInit,
+  onHeaders?: (headers: Headers) => Promise<void>,
+) {
   let response: Response;
   try {
     response = await fetch(url, {
@@ -48,6 +52,7 @@ export async function readPlatform(url: string, init: RequestInit) {
       true,
     );
   }
+  if (onHeaders) await onHeaders(response.headers);
   const reader = response.body?.getReader();
   let size = 0;
   const chunks: Uint8Array[] = [];

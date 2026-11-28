@@ -1,8 +1,14 @@
+import {
+  formatBlindBoxLabel,
+  isBlindBoxThemeId,
+  type BlindBoxBrief,
+} from "./blindbox";
 import { openDB, type DBSchema } from "idb";
 import type {
   Article,
   Asset,
   Job,
+  LayoutAttempt,
   LayoutFailureResponse,
   LayoutResult,
   Preferences,
@@ -157,16 +163,54 @@ export async function loadRecovery(key: string) {
 export async function removeRecovery(key: string) {
   await (await database).delete("recovery", key);
 }
-type FailureCapture = {
+export type FailureCapture = {
   jobId: string;
   articleId: string;
   responses: LayoutFailureResponse[];
+  sourceMarkdown?: string;
+  sourceRevision?: number;
+  title?: string;
+  themeId?: string;
+  model?: string;
+  blindBoxBrief?: BlindBoxBrief;
 };
 const FAILURE_CAPTURE_KEY = "latestLayoutFailureResponses";
+const FAILURE_CAPTURE_INDEX_KEY = "failureCaptureIndex";
+const MAX_FAILURE_CAPTURES = 8;
+const failureCaptureKey = (jobId: string) => `failureCapture:${jobId}`;
+
+export async function getFailureCapture(
+  jobId: string,
+): Promise<FailureCapture | undefined> {
+  const perJob = await getMeta<FailureCapture>(failureCaptureKey(jobId));
+  if (perJob?.jobId === jobId && perJob.responses?.length) return perJob;
+  const legacy = await getMeta<FailureCapture>(FAILURE_CAPTURE_KEY);
+  return legacy?.jobId === jobId && legacy.responses?.length ? legacy : undefined;
+}
 
 export async function getFailureResponses(jobId: string) {
-  const capture = await getMeta<FailureCapture>(FAILURE_CAPTURE_KEY);
-  return capture?.jobId === jobId ? capture.responses : undefined;
+  return (await getFailureCapture(jobId))?.responses;
+}
+
+export async function listFailureCaptureJobIds(): Promise<Set<string>> {
+  const db = await database;
+  const tx = db.transaction("meta", "readonly");
+  const meta = tx.objectStore("meta");
+  const index =
+    ((await meta.get(FAILURE_CAPTURE_INDEX_KEY)) as string[] | undefined) ?? [];
+  const legacy = (await meta.get(FAILURE_CAPTURE_KEY)) as
+    | FailureCapture
+    | undefined;
+  const ids = new Set<string>();
+  for (const jobId of index) {
+    const item = (await meta.get(failureCaptureKey(jobId))) as
+      | FailureCapture
+      | undefined;
+    if (item?.responses?.length) ids.add(jobId);
+  }
+  if (legacy?.jobId && legacy.responses?.length) ids.add(legacy.jobId);
+  await tx.done;
+  return ids;
 }
 
 export async function deleteArticle(key: string) {
@@ -180,11 +224,25 @@ export async function deleteArticle(key: string) {
   for (const value of await tx.objectStore("results").getAll())
     if (value.articleId === key)
       await tx.objectStore("results").delete(value.resultId);
-  for (const value of await tx.objectStore("jobs").getAll())
-    if (value.articleId === key) await tx.objectStore("jobs").delete(value.id);
   const meta = tx.objectStore("meta");
+  const deletedJobIds = new Set<string>();
+  for (const value of await tx.objectStore("jobs").getAll())
+    if (value.articleId === key) {
+      await tx.objectStore("jobs").delete(value.id);
+      await meta.delete(failureCaptureKey(value.id));
+      deletedJobIds.add(value.id);
+    }
+  const index =
+    ((await meta.get(FAILURE_CAPTURE_INDEX_KEY)) as string[] | undefined) ?? [];
+  if (deletedJobIds.size && index.length) {
+    await meta.put(
+      index.filter((id) => !deletedJobIds.has(id)),
+      FAILURE_CAPTURE_INDEX_KEY,
+    );
+  }
   const capture = (await meta.get(FAILURE_CAPTURE_KEY)) as
-    FailureCapture | undefined;
+    | FailureCapture
+    | undefined;
   if (capture?.articleId === key) await meta.delete(FAILURE_CAPTURE_KEY);
   await tx.done;
   changed();
@@ -200,12 +258,38 @@ export async function listVersions(
       sourceRevision: r.sourceRevision,
       createdAt: r.createdAt,
       themeId: r.themeId,
+      ...(r.blindBoxBrief || isBlindBoxThemeId(r.themeId)
+        ? { themeLabel: formatBlindBoxLabel(r.blindBoxBrief, r.themeId) }
+        : {}),
+      needsReview: !!r.reviewIssues?.length && !r.reviewAcceptedAt,
     }));
 }
 export async function getResult(key: string) {
   const result = await (await database).get("results", key);
   if (!result) throw new Error("版本已删除");
   return result;
+}
+export async function acceptReview(resultId: string): Promise<LayoutResult> {
+  const db = await database;
+  const tx = db.transaction("results", "readwrite");
+  const store = tx.objectStore("results");
+  const existing = await store.get(resultId);
+  if (!existing) {
+    await tx.done;
+    throw new Error("版本已删除");
+  }
+  if (existing.reviewAcceptedAt) {
+    await tx.done;
+    return existing;
+  }
+  const next: LayoutResult = {
+    ...existing,
+    reviewAcceptedAt: Date.now() / 1000,
+  };
+  await store.put(next, resultId);
+  await tx.done;
+  changed();
+  return next;
 }
 export async function deleteResult(key: string) {
   await (await database).delete("results", key);
@@ -245,6 +329,60 @@ export async function saveResult(
       },
       job.id,
     );
+  await tx.done;
+  changed();
+}
+export async function saveRecoveredResult(
+  result: LayoutResult,
+  expectedEpoch: number,
+  jobId?: string,
+) {
+  const db = await database,
+    tx = db.transaction(["articles", "results", "meta", "jobs"], "readwrite");
+  const meta = tx.objectStore("meta");
+  if (
+    ((await meta.get("epoch")) || 0) !== expectedEpoch ||
+    !(await tx.objectStore("articles").get(result.articleId))
+  ) {
+    await tx.done;
+    throw new InvalidatedError("数据或文章已失效，不再保存本地恢复结果");
+  }
+  await tx.objectStore("results").put(result, result.resultId);
+  if (jobId) {
+    const jobs = tx.objectStore("jobs");
+    const old = await jobs.get(jobId);
+    if (
+      old &&
+      old.articleId === result.articleId &&
+      (old.status === "failed" || old.status === "outcome_unknown")
+    ) {
+      await jobs.put(
+        {
+          ...old,
+          status: "succeeded",
+          stage: "complete",
+          sent: false,
+          resultId: result.resultId,
+          error: undefined,
+          hasFailureResponses: false,
+        },
+        jobId,
+      );
+    }
+    await meta.delete(failureCaptureKey(jobId));
+    const index =
+      ((await meta.get(FAILURE_CAPTURE_INDEX_KEY)) as string[] | undefined) ?? [];
+    if (index.includes(jobId)) {
+      await meta.put(
+        index.filter((entry) => entry !== jobId),
+        FAILURE_CAPTURE_INDEX_KEY,
+      );
+    }
+    const legacy = (await meta.get(FAILURE_CAPTURE_KEY)) as
+      | FailureCapture
+      | undefined;
+    if (legacy?.jobId === jobId) await meta.delete(FAILURE_CAPTURE_KEY);
+  }
   await tx.done;
   changed();
 }
@@ -308,7 +446,11 @@ export async function claimJob(job: Job) {
   await tx.done;
   changed();
 }
-export async function updateJob(job: Job, responses?: LayoutFailureResponse[]) {
+export async function updateJob(
+  job: Job,
+  responses?: LayoutFailureResponse[],
+  snapshot?: Omit<FailureCapture, "jobId" | "articleId" | "responses">,
+) {
   const db = await database,
     tx = db.transaction(
       responses?.length ? ["jobs", "meta"] : ["jobs"],
@@ -320,12 +462,25 @@ export async function updateJob(job: Job, responses?: LayoutFailureResponse[]) {
   if (updated) {
     await jobs.put(job, job.id);
     if (responses?.length) {
+      const meta = tx.objectStore("meta");
       const capture: FailureCapture = {
         jobId: job.id,
         articleId: job.articleId,
         responses,
+        ...snapshot,
       };
-      await tx.objectStore("meta").put(capture, FAILURE_CAPTURE_KEY);
+      await meta.put(capture, failureCaptureKey(job.id));
+      await meta.put(capture, FAILURE_CAPTURE_KEY);
+      const index =
+        ((await meta.get(FAILURE_CAPTURE_INDEX_KEY)) as string[] | undefined) ?? [];
+      const nextIndex = [job.id, ...index.filter((entry) => entry !== job.id)];
+      for (const staleId of nextIndex.slice(MAX_FAILURE_CAPTURES)) {
+        await meta.delete(failureCaptureKey(staleId));
+      }
+      await meta.put(
+        nextIndex.slice(0, MAX_FAILURE_CAPTURES),
+        FAILURE_CAPTURE_INDEX_KEY,
+      );
     }
   }
   await tx.done;
@@ -334,7 +489,7 @@ export async function updateJob(job: Job, responses?: LayoutFailureResponse[]) {
 }
 export async function beginJobCall(
   key: string,
-  stage: string,
+  attempt: LayoutAttempt,
   expectedEpoch: number,
   walletVersion: string,
 ) {
@@ -357,7 +512,13 @@ export async function beginJobCall(
     await tx.done;
     throw new Error("已达到本篇调用上限");
   }
-  const next = { ...job, stage, callCount: job.callCount + 1, sent: true };
+  const next = {
+    ...job,
+    stage: attempt.stage,
+    callCount: job.callCount + 1,
+    sent: true,
+    attempts: [...(job.attempts ?? []), attempt],
+  };
   await tx.objectStore("jobs").put(next, key);
   await tx.done;
   changed();
@@ -372,6 +533,36 @@ export async function latestJob(articleId: string) {
       .filter((j) => j.articleId === articleId)
       .sort((a, b) => b.startedAt - a.startedAt)[0] || null
   );
+}
+export async function listFailedJobs(articleId: string): Promise<Job[]> {
+  return (await (await database).getAll("jobs"))
+    .filter(
+      (j) =>
+        j.articleId === articleId &&
+        (j.status === "failed" || j.status === "outcome_unknown"),
+    )
+    .sort((a, b) => b.startedAt - a.startedAt);
+}
+export async function deleteJob(key: string) {
+  const db = await database,
+    tx = db.transaction(["jobs", "meta"], "readwrite");
+  await tx.objectStore("jobs").delete(key);
+  const meta = tx.objectStore("meta");
+  await meta.delete(failureCaptureKey(key));
+  const index =
+    ((await meta.get(FAILURE_CAPTURE_INDEX_KEY)) as string[] | undefined) ?? [];
+  if (index.includes(key)) {
+    await meta.put(
+      index.filter((entry) => entry !== key),
+      FAILURE_CAPTURE_INDEX_KEY,
+    );
+  }
+  const legacy = (await meta.get(FAILURE_CAPTURE_KEY)) as
+    | FailureCapture
+    | undefined;
+  if (legacy?.jobId === key) await meta.delete(FAILURE_CAPTURE_KEY);
+  await tx.done;
+  changed();
 }
 export async function activeJob() {
   return (

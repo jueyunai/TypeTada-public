@@ -1,3 +1,5 @@
+export { version as APP_VERSION } from "../package.json";
+
 export const APP_URL = (import.meta.env.VITE_TOKENDANCE_APP_URL || "").trim();
 export const KEY_NAME = (import.meta.env.VITE_TOKENDANCE_KEY_NAME || "").trim();
 export const MODEL = (import.meta.env.VITE_TOKENDANCE_MODEL || "").trim();

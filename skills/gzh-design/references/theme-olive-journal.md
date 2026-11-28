@@ -434,13 +434,13 @@
 
 ## 组件 18 通栏图片 media-full-bleed-image
 
-**用途**：无说明文字的通栏大图，边到边出血效果（负边距抵消容器 8px 内边距，让图片视觉上顶到最边缘）。
+**用途**：无说明文字的通栏大图，贴齐外层容器边缘。
 
 **可替换字段**：`{{图片URL}}`
 
 ```html
 <section style="margin-top:24px;">
-  <section style="padding:0 8px;margin:0 -8px;font-family:'IBM Plex Sans',-apple-system,sans-serif;">
+  <section style="padding:0;margin:0;font-family:'IBM Plex Sans',-apple-system,sans-serif;">
     <section style="background:#fdfdf8;border-radius:6px;padding:6px;border:1px solid #bfc1b7;">
       <figure style="margin:0;border-radius:4px;overflow:hidden;">
         <span leaf=""><img src="{{图片URL}}" alt="通栏图片" style="max-width:100%;height:auto;display:block;margin:0 auto;"></span>

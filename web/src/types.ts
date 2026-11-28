@@ -1,3 +1,5 @@
+import type { BlindBoxBrief, BlindBoxStyle } from "./blindbox";
+
 export type Article = {
   id: string;
   title: string;
@@ -19,6 +21,21 @@ export type Validation = {
   resolvedExceptions?: string[];
   notice?: string;
 };
+export type BlockDiagnostic = {
+  sourceId: string;
+  kind:
+    | "changed_text"
+    | "changed_image"
+    | "changed_link"
+    | "changed_table"
+    | "changed_inline_code"
+    | "out_of_order"
+    | "outside_body"
+    | "missing";
+  expected: string;
+  actual: string;
+  detail?: string;
+};
 export type LayoutResult = {
   resultId: string;
   articleId: string;
@@ -36,18 +53,23 @@ export type LayoutResult = {
   plainText: string;
   htmlSha256: string;
   validation: Validation;
+  reviewIssues?: BlockDiagnostic[];
+  reviewAcceptedAt?: number;
   imageStatus: "none" | "remote" | "local_pending";
   demo?: boolean;
   notice?: string;
   usage: { inputTokens: number | null; outputTokens: number | null };
   enhancements: { type: string; text: string; sourceIds: string[]; location?: string }[];
   decisions: string[];
+  blindBoxBrief?: BlindBoxBrief;
 };
 export type Version = {
   id: string;
   sourceRevision: number;
   createdAt: number;
   themeId: string;
+  themeLabel?: string;
+  needsReview?: boolean;
 };
 export type Job = {
   id: string;
@@ -58,6 +80,7 @@ export type Job = {
   callCount: number;
   sent: boolean;
   startedAt: number;
+  appVersion?: string;
   error?: { message: string; recoveryAction?: string; billingState?: string };
   resultId?: string;
   layout?: { model: string; themeId: string; sourceCharacters: number; sourceBlocks: number };
@@ -73,6 +96,8 @@ export type Job = {
 };
 export type LayoutAttempt = {
   stage: "analyze" | "generate" | "repair";
+  traceId?: string;
+  platformTraceId?: string;
   elapsedMs?: number;
   response?: NonNullable<Job["diagnostic"]>;
   validation?: Validation;
@@ -93,7 +118,8 @@ export type Asset = {
 };
 export type Preferences = {
   theme: string;
-  mode: "format_only" | "auto";
+  mode: "format_only" | "auto" | "blindbox";
+  blindBoxStyle?: BlindBoxStyle;
   authorMode: "preserve" | "custom" | "none";
   name: string;
   bio: string;
@@ -104,6 +130,7 @@ export type Preferences = {
 export const DEFAULT_PREFERENCES: Preferences = {
   theme: "moyu-green",
   mode: "format_only",
+  blindBoxStyle: "random",
   authorMode: "preserve",
   name: "",
   bio: "",
